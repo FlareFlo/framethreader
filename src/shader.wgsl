@@ -3,13 +3,41 @@ struct VertexOutput {
     @location(0) tex_coords: vec2<f32>,
 };
 
+struct Uniforms {
+    scale: vec2<f32>,
+}
+
+@group(0) @binding(2)
+var<uniform> uniforms: Uniforms;
+
 @vertex
 fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
     var out: VertexOutput;
-    let u = f32((in_vertex_index << 1u) & 2u);
-    let v = f32(in_vertex_index & 2u);
-    out.tex_coords = vec2<f32>(u, v);
-    out.clip_position = vec4<f32>(u * 2.0 - 1.0, 1.0 - v * 2.0, 0.0, 1.0);
+    
+    // A 6-vertex quad covers the [-1, 1] bounds precisely.
+    // This allows scaling without causing diagonal hypotenuse issues.
+    var pos = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0,  1.0),
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 1.0,  1.0),
+        vec2<f32>( 1.0,  1.0),
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 1.0, -1.0)
+    );
+    
+    var tex = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 1.0)
+    );
+    
+    let p = pos[in_vertex_index];
+    out.tex_coords = tex[in_vertex_index];
+    out.clip_position = vec4<f32>(p.x * uniforms.scale.x, p.y * uniforms.scale.y, 0.0, 1.0);
+    
     return out;
 }
 

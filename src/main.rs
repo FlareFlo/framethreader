@@ -18,6 +18,7 @@ struct WgpuState {
     render_pipeline: wgpu::RenderPipeline,
     diffuse_bind_group: wgpu::BindGroup,
     texture: wgpu::Texture,
+    uniform_buffer: wgpu::Buffer,
     
     frame_cache: Arc<RwLock<Vec<Option<Vec<u8>>>>>,
     total_frames: usize,
@@ -111,6 +112,14 @@ impl WgpuState {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let scale = [1.0f32, 1.0f32];
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Uniform Buffer"),
+            size: std::mem::size_of::<[f32; 2]>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&uniform_buffer, 0, bytemuck::cast_slice(&scale));
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
@@ -130,6 +139,16 @@ impl WgpuState {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
             label: Some("texture_bind_group_layout"),
         });
@@ -144,6 +163,10 @@ impl WgpuState {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uniform_buffer.as_entire_binding(),
                 },
             ],
             label: Some("diffuse_bind_group"),
@@ -206,6 +229,7 @@ impl WgpuState {
             render_pipeline,
             diffuse_bind_group,
             texture,
+            uniform_buffer,
             frame_cache,
             total_frames,
             current_frame: 0,
@@ -219,6 +243,16 @@ impl WgpuState {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
+
+            let window_aspect = new_size.width as f32 / new_size.height as f32;
+            let image_aspect = self.image_size.width as f32 / self.image_size.height as f32;
+
+            let scale = if window_aspect > image_aspect {
+                [image_aspect / window_aspect, 1.0f32]
+            } else {
+                [1.0f32, window_aspect / image_aspect]
+            };
+            self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&scale));
         }
     }
 
