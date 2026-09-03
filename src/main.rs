@@ -372,9 +372,24 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(window) = &self.window {
-            window.request_redraw();
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(state) = &self.state {
+            if state.is_playing {
+                let target_framerate = 30.0;
+                let target_frame_time = std::time::Duration::from_secs_f32(1.0 / target_framerate);
+                let next_frame_time = self.last_update_inst + target_frame_time;
+                
+                if Instant::now() >= next_frame_time {
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    event_loop.set_control_flow(ControlFlow::Wait);
+                } else {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(next_frame_time));
+                }
+            } else {
+                event_loop.set_control_flow(ControlFlow::Wait);
+            }
         }
     }
 }
@@ -382,7 +397,8 @@ impl ApplicationHandler for App {
 pub fn main() {
     env_logger::init();
     let event_loop = EventLoop::new().unwrap();
-    event_loop.set_control_flow(ControlFlow::Poll);
+    // Default control flow is Wait, we will manage it in about_to_wait
+    event_loop.set_control_flow(ControlFlow::Wait);
 
     let mut app = App {
         window: None,
