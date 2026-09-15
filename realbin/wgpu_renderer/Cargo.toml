@@ -4,3 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+rayon = { workspace = true}
+winit = { workspace = true}
+env_logger = { workspace = true}
+wgpu = { workspace = true}
+image = { workspace = true}
+pollster = { workspace = true}
+bytemuck = { workspace = true}

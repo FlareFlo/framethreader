@@ -1,6 +1,6 @@
 [workspace]
-members = ["realbin/*"]
-resolver = "2"
+members = ["realbin/launcher", "realbin/wgpu_renderer"]
+resolver = "3"
 
 [package]
 name = "framethreader"
@@ -8,6 +8,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+launcher = {path = "realbin/launcher"}
+wgpu_renderer = {path = "realbin/wgpu_renderer"}
+
+[workspace.dependencies]
 wgpu = "30.0.1"
 winit = "0.30.13"
 env_logger = "0.11.11"

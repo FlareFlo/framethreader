@@ -1,10 +1,22 @@
 mod gpu;
 
+use winit::keyboard::KeyCode;
+use winit::keyboard::PhysicalKey;
+use winit::event::ElementState;
+use winit::event::KeyEvent;
+use winit::event_loop::ActiveEventLoop;
+use winit::application::ApplicationHandler;
+use winit::window::{Window, WindowId};
+use winit::event_loop::ControlFlow;
+use winit::event_loop::EventLoop;
 use std::sync::Arc;
 use std::time::Instant;
+use winit::event::WindowEvent;
 use gpu::WgpuState;
 
-pub fn submain() {
+pub const RUNMODE: &str = "wgpu";
+
+pub fn realmain() {
     env_logger::init();
     let event_loop = EventLoop::new().unwrap();
     // Default control flow is Wait, we will manage it in about_to_wait
