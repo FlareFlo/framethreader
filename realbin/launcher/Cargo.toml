@@ -8,3 +8,4 @@ egui = {workspace = true}
 eframe = {workspace = true}
 egui_extras = {workspace = true}
 env_logger = {workspace = true}
+rfd = {workspace = true}

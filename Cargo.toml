@@ -22,6 +22,7 @@ bytemuck = { version = "1.18", features = ["derive"] }
 eframe = "0.36.2"
 egui = "0.36.2"
 egui_extras = "0.36.2"
+rfd = "0.17.2"
 
 [profile.dev.package.image]
 opt-level = 3
