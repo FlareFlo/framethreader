@@ -1,7 +1,3 @@
-use crate::seq_detect::{extract_timestamps, group_into_bursts};
-use crate::seq_detect::PhotoMeta;
-use std::fs;
-use std::path::PathBuf;
 use winit::{
     application::ApplicationHandler,
     event::{ElementState, KeyEvent, WindowEvent},
@@ -15,7 +11,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 mod gpu;
-mod seq_detect;
 
 use gpu::WgpuState;
 
@@ -91,29 +86,6 @@ impl ApplicationHandler for App {
 }
 
 pub fn main() {
-    let directory = "/home/flareflo/network_share/ILCE6400/2026-09-10";
-
-    // 1. Scan directory instantly
-    let files: Vec<PathBuf> = fs::read_dir(directory)
-        .expect("Failed to read directory")
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.extension().map_or(false, |ext| ext == "ARW"))
-        .collect();
-
-    // 2. Process all files in parallel over the network
-    let mut metadata: Vec<PhotoMeta> = files
-        .into_par_iter() // Rayon handles the threading automatically
-        .filter_map(extract_timestamps)
-        .collect();
-
-    let bursts = group_into_bursts(metadata);
-
-    for meta in bursts {
-        let first = &meta[0];
-        println!("{} with {} images", first.path.display(), meta.len())
-    }
-    return;
     env_logger::init();
     let event_loop = EventLoop::new().unwrap();
     // Default control flow is Wait, we will manage it in about_to_wait
