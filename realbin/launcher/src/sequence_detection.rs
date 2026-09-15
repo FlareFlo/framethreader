@@ -1,5 +1,5 @@
 use time::macros::format_description;
-use time::{PlainDateTime, Time};
+use time::{Duration, PlainDateTime, Time};
 use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
@@ -24,12 +24,12 @@ struct ExifRaw {
 }
 
 #[derive(Debug)]
-struct BurstFile {
+pub struct BurstFile {
 	path: PathBuf,
 	created: PlainDateTime,
 }
 
-pub fn scan_for_sequence(path: PathBuf) {
+pub fn scan_images(path: PathBuf) -> Vec<BurstFile> {
 	let datefmt = format_description!("[year]:[month]:[day] [hour]:[minute]:[second]");
 
 	let valid_files = path.read_dir().unwrap()
@@ -41,7 +41,7 @@ pub fn scan_for_sequence(path: PathBuf) {
 		).collect::<Vec<_>>();
 
 	let len = valid_files.len();
-	let all_files = valid_files.into_iter().progress_count(len as _).par_bridge().map(|valid_file| {
+	let mut all_files = valid_files.into_iter().progress_count(len as _).par_bridge().map(|valid_file| {
 		let mut head = File::open(&valid_file.path()).unwrap();
 		let mut buf = vec![0u8; 2usize.pow(16)];
 		head.read_exact(buf.as_mut_slice()).unwrap();
@@ -63,7 +63,27 @@ pub fn scan_for_sequence(path: PathBuf) {
 			created: PlainDateTime::parse(&ser.create_date, &datefmt).unwrap().replace_microsecond(ser.subsec as u32 * 1000).unwrap(),
 		}
 	}).collect::<Vec<_>>();
-	dbg!(all_files);
+	all_files.sort_unstable_by_key(|k|k.created);
+	all_files
+}
+
+pub fn detect_by_time(frames: &[BurstFile], threshold: Duration) {
+	let mut bursts = vec![];
+	let mut last_td = PlainDateTime::MIN;
+	let mut current_burst = vec![];
+	for frame in frames {
+		if last_td.add(threshold) >= frame.created {
+			current_burst.push(frame);
+		} else {
+			bursts.push(current_burst);
+			current_burst = vec![];
+		}
+
+		last_td = frame.created;
+	}
+	for len in bursts.iter().filter(|e| e.len() > 2) {
+		dbg!(len.len());
+	}
 }
 
 

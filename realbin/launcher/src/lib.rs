@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use std::thread;
 use std::thread::JoinHandle;
 use eframe::egui;
-use crate::sequence_detection::scan_for_sequence;
+use time::Duration;
+use crate::sequence_detection::{detect_by_time, scan_images};
 
 pub fn realmain() {
 	env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
@@ -68,7 +69,10 @@ impl MyApp {
 					.pick_folder();
 				if let Some(path) = picked {
 					let bd = path.clone();
-					let handle = thread::spawn(|| scan_for_sequence(bd));
+					let handle = thread::spawn(|| {
+						let images = scan_images(bd);
+						detect_by_time(&images, Duration::milliseconds(300));
+					});
 					self.state = LauncherState::Scanning {path, handle};
 				}
 			}
