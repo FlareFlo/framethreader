@@ -1,3 +1,7 @@
+[workspace]
+members = ["realbin/*"]
+resolver = "2"
+
 [package]
 name = "framethreader"
 version = "0.1.0"
