@@ -7,6 +7,7 @@ pub const RUNMODE: &str = "launcher";
 use std::path::Path;
 use std::path::PathBuf;
 use std::thread;
+use std::thread::JoinHandle;
 use eframe::egui;
 use crate::sequence_detection::scan_for_sequence;
 
@@ -34,9 +35,10 @@ struct MyApp {
 
 enum LauncherState {
 	Initial,
-	BasedirPicked {
-		path: PathBuf
-	}
+	Scanning {
+		path: PathBuf,
+		handle: JoinHandle<()>,
+	},
 }
 
 impl Default for MyApp {
@@ -51,7 +53,7 @@ impl eframe::App for MyApp {
 	fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
 		match self.state {
 			LauncherState::Initial =>self.initial_picker(ui, frame),
-			LauncherState::BasedirPicked {ref path} => {self.scan_basedir(ui, frame, path.clone())},
+			LauncherState::Scanning {ref path, ref handle} => {Self::scan_basedir(ui, frame, path)},
 		}
 	}
 }
@@ -65,18 +67,18 @@ impl MyApp {
 				let picked = rfd::FileDialog::new()
 					.pick_folder();
 				if let Some(path) = picked {
-					self.state = LauncherState::BasedirPicked {path};
+					let bd = path.clone();
+					let handle = thread::spawn(|| scan_for_sequence(bd));
+					self.state = LauncherState::Scanning {path, handle};
 				}
 			}
 		});
 	}
 
-	pub fn scan_basedir(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame, basedir: PathBuf) {
+	pub fn scan_basedir(ui: &mut egui::Ui, _frame: &mut eframe::Frame, basedir: &Path)  {
 		egui::CentralPanel::default().show(ui, |ui| {
 			ui.heading("Framethreader");
-			ui.label("Helo");
-			let bd = basedir.clone();
-			thread::spawn(|| scan_for_sequence(bd));
+			ui.label("Scanning loading bar yes");
 		});
 	}
 }
