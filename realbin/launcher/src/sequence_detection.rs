@@ -4,8 +4,10 @@ use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
 use std::ops::Add;
+use std::path::Component::CurDir;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use indicatif::{ProgressBar, ProgressIterator};
 use rayon::iter::IntoParallelIterator;
 use serde::{Deserialize, Deserializer};
@@ -41,7 +43,10 @@ pub fn scan_images(path: PathBuf) -> Vec<BurstFile> {
 		).collect::<Vec<_>>();
 
 	let len = valid_files.len();
+	set_total(len);
+	set_current_task("Scanning all files");
 	let mut all_files = valid_files.into_iter().progress_count(len as _).par_bridge().map(|valid_file| {
+		set_current_file(valid_file.path().display().to_string());
 		let mut head = File::open(&valid_file.path()).unwrap();
 		let mut buf = vec![0u8; 2usize.pow(16)];
 		head.read_exact(buf.as_mut_slice()).unwrap();
@@ -58,6 +63,7 @@ pub fn scan_images(path: PathBuf) -> Vec<BurstFile> {
 		// fs::write("out.json", res.stdout.clone()).unwrap();
 		let ser: Vec<ExifRaw> = serde_json::from_slice(&res.stdout).unwrap();
 		let ser = &ser[0];
+		incr(1);
 		BurstFile {
 			path: valid_file.path(),
 			created: PlainDateTime::parse(&ser.create_date, &datefmt).unwrap().replace_microsecond(ser.subsec as u32 * 1000).unwrap(),
@@ -67,11 +73,12 @@ pub fn scan_images(path: PathBuf) -> Vec<BurstFile> {
 	all_files
 }
 
-pub fn detect_by_time(frames: &[BurstFile], threshold: Duration) {
+pub fn detect_by_time(frames: Vec<BurstFile>, threshold: Duration, min_frames: usize) -> Vec<Vec<BurstFile>> {
 	let mut bursts = vec![];
 	let mut last_td = PlainDateTime::MIN;
 	let mut current_burst = vec![];
 	for frame in frames {
+		let created_now = frame.created;
 		if last_td.add(threshold) >= frame.created {
 			current_burst.push(frame);
 		} else {
@@ -79,11 +86,9 @@ pub fn detect_by_time(frames: &[BurstFile], threshold: Duration) {
 			current_burst = vec![];
 		}
 
-		last_td = frame.created;
+		last_td = created_now;
 	}
-	for len in bursts.iter().filter(|e| e.len() > 2) {
-		dbg!(len.len());
-	}
+	bursts.into_iter().filter(|e| e.len() >= min_frames).collect()
 }
 
 
@@ -102,5 +107,47 @@ where
 	match StringOrInt::deserialize(deserializer)? {
 		StringOrInt::Int(i) => Ok(i),
 		StringOrInt::String(s) => s.parse::<u16>().map_err(serde::de::Error::custom),
+	}
+}
+
+static CURRENT_PROGRESS: Mutex<ScanProgress> = Mutex::new(ScanProgress {total: 0, completed: 0, current_file: String::new(), current_task: String::new()});
+
+#[derive(Debug, Default, Clone)]
+pub struct ScanProgress {
+	pub total: usize,
+	pub completed: usize,
+	pub current_task: String,
+	pub current_file: String,
+}
+
+fn set_total(total: usize) {
+	let mut t = CURRENT_PROGRESS.lock().unwrap();
+	t.total = total;
+	t.completed = 0;
+}
+
+fn incr(delta: usize) {
+	let mut t = CURRENT_PROGRESS.lock().unwrap();
+	t.completed = t.completed.add(delta).min(t.total);
+}
+
+fn set_current_file(file: impl ToString) {
+	CURRENT_PROGRESS.lock().unwrap().current_file = file.to_string();
+}
+
+fn set_current_task(task: impl ToString) {
+	CURRENT_PROGRESS.lock().unwrap().current_task = task.to_string();
+}
+
+pub fn get_progress() -> ScanProgress {
+	CURRENT_PROGRESS.lock().unwrap().clone()
+}
+
+impl ScanProgress {
+	pub fn progress_ratio(&self) -> f32 {
+		self.completed as f32 / self.total as f32
+	}
+	pub fn complete(&self) -> bool {
+		self.completed == self.total
 	}
 }

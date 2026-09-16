@@ -4,13 +4,17 @@ mod sequence_detection;
 
 pub const RUNMODE: &str = "launcher";
 
+use std::ops::Not;
 use std::path::Path;
 use std::path::PathBuf;
-use std::thread;
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::{mem, thread};
 use std::thread::JoinHandle;
 use eframe::egui;
+use egui::ProgressBar;
 use time::Duration;
-use crate::sequence_detection::{detect_by_time, scan_images};
+use crate::sequence_detection::{detect_by_time, scan_images, BurstFile};
 
 pub fn realmain() {
 	env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
@@ -34,12 +38,18 @@ struct MyApp {
 	state: LauncherState,
 }
 
+#[derive(Default)]
+
 enum LauncherState {
+	#[default]
 	Initial,
 	Scanning {
 		path: PathBuf,
-		handle: JoinHandle<()>,
+		handle: JoinHandle<Vec<Vec<BurstFile>>>,
 	},
+	CompletedScan {
+		files: Vec<Vec<BurstFile>>,
+	}
 }
 
 impl Default for MyApp {
@@ -52,10 +62,20 @@ impl Default for MyApp {
 
 impl eframe::App for MyApp {
 	fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-		match self.state {
-			LauncherState::Initial =>self.initial_picker(ui, frame),
-			LauncherState::Scanning {ref path, ref handle} => {Self::scan_basedir(ui, frame, path)},
-		}
+		let state= mem::take(&mut self.state);
+		self.state = match state {
+			LauncherState::Initial =>{self.initial_picker(ui, frame); state},
+			LauncherState::Scanning { handle, path} => {
+				Self::scan_basedir(ui, frame);
+				if handle.is_finished() {
+					let res = handle.join().unwrap();
+					LauncherState::CompletedScan {files: res}
+				} else {
+					state
+				}
+			},
+			LauncherState::CompletedScan {ref files} => {Self::show_scan_results(ui, frame, files); state}
+		};
 	}
 }
 
@@ -71,18 +91,30 @@ impl MyApp {
 					let bd = path.clone();
 					let handle = thread::spawn(|| {
 						let images = scan_images(bd);
-						detect_by_time(&images, Duration::milliseconds(300));
+						let frames = detect_by_time(images, Duration::milliseconds(300), 3);
+						frames
 					});
-					self.state = LauncherState::Scanning {path, handle};
+					self.state = LauncherState::Scanning {path, handle };
 				}
 			}
 		});
 	}
 
-	pub fn scan_basedir(ui: &mut egui::Ui, _frame: &mut eframe::Frame, basedir: &Path)  {
+	pub fn scan_basedir(ui: &mut egui::Ui, _frame: &mut eframe::Frame)  {
 		egui::CentralPanel::default().show(ui, |ui| {
 			ui.heading("Framethreader");
-			ui.label("Scanning loading bar yes");
+			let progress = sequence_detection::get_progress();
+			let msg = format!("{} {}", progress.current_task, progress.current_file.rsplit_once("/").map(|e|e.1).unwrap_or(&progress.current_file));
+			ui.add(ProgressBar::new(progress.progress_ratio()).show_percentage().text(msg).desired_width(300.0));
+			if progress.complete().not() {
+				ui.request_repaint();
+			} else {
+
+			}
 		});
+	}
+
+	pub fn show_scan_results(ui: &mut egui::Ui, _frame: &mut eframe::Frame, files: &Vec<Vec<BurstFile>>)  {
+
 	}
 }
