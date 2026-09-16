@@ -62,25 +62,37 @@ impl Default for MyApp {
 
 impl eframe::App for MyApp {
 	fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-		let state= mem::take(&mut self.state);
-		self.state = match state {
-			LauncherState::Initial =>{self.initial_picker(ui, frame); state},
-			LauncherState::Scanning { handle, path} => {
-				Self::scan_basedir(ui, frame);
-				if handle.is_finished() {
+		// Scanning -> CompletedScanning
+		if let LauncherState::Scanning { handle, .. } = &self.state {
+			if handle.is_finished() {
+				if let LauncherState::Scanning { handle, .. } = mem::take(&mut self.state) {
 					let res = handle.join().unwrap();
-					LauncherState::CompletedScan {files: res}
-				} else {
-					state
+					self.state = LauncherState::CompletedScan { files: res };
 				}
-			},
-			LauncherState::CompletedScan {ref files} => {Self::show_scan_results(ui, frame, files); state}
+			}
+		}
+
+		// Only render UI here
+		let new_state = match &self.state {
+			LauncherState::Initial => Self::initial_picker(ui, frame),
+			LauncherState::Scanning { .. } => {
+				Self::scan_basedir(ui, frame);
+				None
+			}
+			LauncherState::CompletedScan { files } => {
+				Self::show_scan_results(ui, frame, files);
+				None
+			}
 		};
+
+		if let Some(state) = new_state {
+			self.state = state;
+		}
 	}
 }
 
 impl MyApp {
-	pub fn initial_picker(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+	pub fn initial_picker(ui: &mut egui::Ui, _frame: &mut eframe::Frame) -> Option<LauncherState> {
 		egui::CentralPanel::default().show(ui, |ui| {
 			ui.heading("Framethreader");
 
@@ -94,10 +106,11 @@ impl MyApp {
 						let frames = detect_by_time(images, Duration::milliseconds(300), 3);
 						frames
 					});
-					self.state = LauncherState::Scanning {path, handle };
+					return Some(LauncherState::Scanning {path, handle });
 				}
 			}
-		});
+			None
+		}).inner
 	}
 
 	pub fn scan_basedir(ui: &mut egui::Ui, _frame: &mut eframe::Frame)  {
