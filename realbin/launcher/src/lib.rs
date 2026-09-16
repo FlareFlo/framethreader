@@ -12,7 +12,7 @@ use std::sync::atomic::AtomicUsize;
 use std::{mem, thread};
 use std::thread::JoinHandle;
 use eframe::egui;
-use egui::ProgressBar;
+use egui::{ProgressBar, Slider};
 use time::Duration;
 use crate::sequence_detection::{detect_by_time, scan_images, BurstFile};
 
@@ -49,6 +49,7 @@ enum LauncherState {
 	},
 	CompletedScan {
 		files: Vec<Vec<BurstFile>>,
+		min_frames: usize,
 	}
 }
 
@@ -67,20 +68,20 @@ impl eframe::App for MyApp {
 			if handle.is_finished() {
 				if let LauncherState::Scanning { handle, .. } = mem::take(&mut self.state) {
 					let res = handle.join().unwrap();
-					self.state = LauncherState::CompletedScan { files: res };
+					self.state = LauncherState::CompletedScan { files: res, min_frames: 3 };
 				}
 			}
 		}
 
 		// Only render UI here
-		let new_state = match &self.state {
+		let new_state = match &mut self.state {
 			LauncherState::Initial => Self::initial_picker(ui, frame),
 			LauncherState::Scanning { .. } => {
 				Self::scan_basedir(ui, frame);
 				None
 			}
-			LauncherState::CompletedScan { files } => {
-				Self::show_scan_results(ui, frame, files);
+			LauncherState::CompletedScan { files, min_frames } => {
+				Self::show_scan_results(ui, frame, files, min_frames);
 				None
 			}
 		};
@@ -103,7 +104,7 @@ impl MyApp {
 					let bd = path.clone();
 					let handle = thread::spawn(|| {
 						let images = scan_images(bd);
-						let frames = detect_by_time(images, Duration::milliseconds(300), 3);
+						let frames = detect_by_time(images, Duration::milliseconds(300));
 						frames
 					});
 					return Some(LauncherState::Scanning {path, handle });
@@ -121,13 +122,53 @@ impl MyApp {
 			ui.add(ProgressBar::new(progress.progress_ratio()).show_percentage().text(msg).desired_width(300.0));
 			if progress.complete().not() {
 				ui.request_repaint();
-			} else {
-
 			}
 		});
 	}
 
-	pub fn show_scan_results(ui: &mut egui::Ui, _frame: &mut eframe::Frame, files: &Vec<Vec<BurstFile>>)  {
-
+	pub fn show_scan_results(ui: &mut egui::Ui, _frame: &mut eframe::Frame, files: &[Vec<BurstFile>], min_frames: &mut usize)  {
+		egui::CentralPanel::default().show(ui, |ui| {
+			ui.heading("Scan Results");
+			ui.add(Slider::new(min_frames, 1..=100).text("Min Frames"));
+			egui_extras::TableBuilder::new(ui)
+				.striped(true)
+				.column(egui_extras::Column::initial(60.0).at_least(40.0))
+				.column(egui_extras::Column::initial(100.0).at_least(80.0))
+				.column(egui_extras::Column::remainder())
+				.header(20.0, |mut header| {
+					header.col(|ui| {
+						ui.heading("Group");
+					});
+					header.col(|ui| {
+						ui.heading("Length");
+					});
+					header.col(|ui| {
+						ui.heading("Duration");
+					});
+				})
+				.body(|mut body| {
+					for (i, group) in files.iter().enumerate() {
+						if group.len() < *min_frames {
+							continue;
+						}
+						body.row(20.0, |mut row| {
+							row.col(|ui| {
+								ui.label(format!("#{}", i + 1));
+							});
+							row.col(|ui| {
+								ui.label(format!("{} frames", group.len()));
+							});
+							row.col(|ui| {
+								if let (Some(first), Some(last)) = (group.first(), group.last()) {
+									let duration = last.created - first.created;
+									ui.label(format!("{:.2}s", duration.as_seconds_f32()));
+								} else {
+									ui.label("-");
+								}
+							});
+						});
+					}
+				});
+		});
 	}
 }

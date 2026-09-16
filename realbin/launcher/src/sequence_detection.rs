@@ -27,8 +27,8 @@ struct ExifRaw {
 
 #[derive(Debug)]
 pub struct BurstFile {
-	path: PathBuf,
-	created: PlainDateTime,
+	pub path: PathBuf,
+	pub created: PlainDateTime,
 }
 
 pub fn scan_images(path: PathBuf) -> Vec<BurstFile> {
@@ -73,7 +73,7 @@ pub fn scan_images(path: PathBuf) -> Vec<BurstFile> {
 	all_files
 }
 
-pub fn detect_by_time(frames: Vec<BurstFile>, threshold: Duration, min_frames: usize) -> Vec<Vec<BurstFile>> {
+pub fn detect_by_time(frames: Vec<BurstFile>, threshold: Duration) -> Vec<Vec<BurstFile>> {
 	let mut bursts = vec![];
 	let mut last_td = PlainDateTime::MIN;
 	let mut current_burst = vec![];
@@ -88,7 +88,7 @@ pub fn detect_by_time(frames: Vec<BurstFile>, threshold: Duration, min_frames: u
 
 		last_td = created_now;
 	}
-	bursts.into_iter().filter(|e| e.len() >= min_frames).collect()
+	bursts
 }
 
 
