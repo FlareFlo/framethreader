@@ -9,7 +9,7 @@ pub fn main() {
     let self_path = env::current_exe().unwrap();
 
     let mut children = vec![];
-    match mode.as_deref() {
+    match dbg!(mode.as_deref()) {
         Ok(wgpu_renderer::RUNMODE) => {
             wgpu_renderer::realmain();
         }
@@ -21,7 +21,7 @@ pub fn main() {
             children.push(child);
         }
         _ => {
-            launcher::realmain();
+            panic!("Unknown runmode: {mode:?}");
         }
     }
 

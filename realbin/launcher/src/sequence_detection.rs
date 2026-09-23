@@ -111,7 +111,6 @@ pub fn scan_images(path: PathBuf) -> Vec<BurstFile> {
     let mut all_files = valid_files
         .into_iter()
         .progress_count(len as _)
-        .par_bridge()
         .filter_map(|valid_file| {
             set_current_file(valid_file.path().display().to_string());
             
