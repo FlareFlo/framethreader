@@ -213,34 +213,62 @@ impl MyApp {
                         }
                         body.row(120.0, |mut row| {
                             row.col(|ui| {
-                                let time = ui.input(|i| i.time);
-                                let play_idx = (time * 10.0) as usize % group.len();
-                                let path = group[play_idx].path().clone();
-                                
-                                if !thumbnails.contains_key(&path) {
-                                    thumbnails.insert(path.clone(), ThumbnailState::Loading);
-                                    let tx = image_tx.clone();
-                                    let path_clone = path.clone();
-                                    let ctx = ui.ctx().clone();
-                                    std::thread::spawn(move || {
-                                        use crate::burst::EmbeddedImageType;
-                                        let rgb_opt = BurstFile::extract_embedded_image(&path_clone, EmbeddedImageType::Thumbnail);
-                                        let color_image = rgb_opt.map(|img| {
-                                            let size = [img.width() as _, img.height() as _];
-                                            let pixels = img.as_flat_samples();
-                                            egui::ColorImage::from_rgb(size, pixels.as_slice())
+                                let mut all_loaded = true;
+                                for frame in group.iter() {
+                                    let frame_path = frame.path();
+                                    if !thumbnails.contains_key(frame_path) {
+                                        thumbnails.insert(frame_path.clone(), ThumbnailState::Loading);
+                                        all_loaded = false;
+                                        let tx = image_tx.clone();
+                                        let path_clone = frame_path.clone();
+                                        let ctx = ui.ctx().clone();
+                                        std::thread::spawn(move || {
+                                            use crate::burst::EmbeddedImageType;
+                                            let rgb_opt = BurstFile::extract_embedded_image(&path_clone, EmbeddedImageType::Thumbnail);
+                                            let color_image = rgb_opt.map(|img| {
+                                                let size = [img.width() as _, img.height() as _];
+                                                let pixels = img.as_flat_samples();
+                                                egui::ColorImage::from_rgb(size, pixels.as_slice())
+                                            });
+                                            let _ = tx.send((path_clone, false, color_image));
+                                            ctx.request_repaint();
                                         });
-                                        let _ = tx.send((path_clone, false, color_image));
-                                        ctx.request_repaint();
-                                    });
+                                    } else if let Some(ThumbnailState::Loading) = thumbnails.get(frame_path) {
+                                        all_loaded = false;
+                                    }
                                 }
-                                
-                                match thumbnails.get(&path) {
-                                    Some(ThumbnailState::Loaded(texture)) => {
+
+                                if all_loaded {
+                                    let time = ui.input(|i| i.time);
+                                    let play_idx = (time * 10.0) as usize % group.len();
+                                    let path = group[play_idx].path().clone();
+                                    if let Some(ThumbnailState::Loaded(texture)) = thumbnails.get(&path) {
                                         ui.add(egui::Image::new(texture).fit_to_exact_size(egui::vec2(160.0, 120.0)));
                                     }
-                                    _ => {
-                                        ui.spinner();
+                                } else {
+                                    let mut fallback = None;
+                                    let mid_path = group[group.len() / 2].path();
+                                    if let Some(ThumbnailState::Loaded(tex)) = thumbnails.get(mid_path) {
+                                        fallback = Some(tex);
+                                    } else {
+                                        for frame in group.iter() {
+                                            if let Some(ThumbnailState::Loaded(tex)) = thumbnails.get(frame.path()) {
+                                                fallback = Some(tex);
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    if let Some(tex) = fallback {
+                                        let response = ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(160.0, 120.0)).tint(egui::Color32::from_gray(100)));
+                                        let center = response.rect.center();
+                                        let spinner_rect = egui::Rect::from_center_size(center, egui::vec2(20.0, 20.0));
+                                        ui.put(spinner_rect, egui::Spinner::new());
+                                    } else {
+                                        let (rect, _resp) = ui.allocate_exact_size(egui::vec2(160.0, 120.0), egui::Sense::hover());
+                                        let center = rect.center();
+                                        let spinner_rect = egui::Rect::from_center_size(center, egui::vec2(20.0, 20.0));
+                                        ui.put(spinner_rect, egui::Spinner::new());
                                     }
                                 }
                             });
@@ -274,40 +302,78 @@ impl MyApp {
                     .open(&mut preview_open)
                     .default_size(egui::vec2(800.0, 600.0))
                     .show(ui.ctx(), |ui| {
-                        let time = ui.input(|i| i.time);
-                        let play_idx = (time * 10.0) as usize % group.len();
-                        let play_path = group[play_idx].path().clone();
-
-                        if !previews.contains_key(&play_path) {
-                            previews.insert(play_path.clone(), ThumbnailState::Loading);
-                            let tx = image_tx.clone();
-                            let path_clone = play_path.clone();
-                            let ctx = ui.ctx().clone();
-                            std::thread::spawn(move || {
-                                use crate::burst::EmbeddedImageType;
-                                let rgb_opt = BurstFile::extract_embedded_image(&path_clone, EmbeddedImageType::Preview);
-                                let color_image = rgb_opt.map(|img| {
-                                    let size = [img.width() as _, img.height() as _];
-                                    let pixels = img.as_flat_samples();
-                                    egui::ColorImage::from_rgb(size, pixels.as_slice())
+                        let mut all_loaded = true;
+                        for frame in group.iter() {
+                            let frame_path = frame.path();
+                            if !previews.contains_key(frame_path) {
+                                previews.insert(frame_path.clone(), ThumbnailState::Loading);
+                                all_loaded = false;
+                                let tx = image_tx.clone();
+                                let path_clone = frame_path.clone();
+                                let ctx = ui.ctx().clone();
+                                std::thread::spawn(move || {
+                                    use crate::burst::EmbeddedImageType;
+                                    let rgb_opt = BurstFile::extract_embedded_image(&path_clone, EmbeddedImageType::Preview);
+                                    let color_image = rgb_opt.map(|img| {
+                                        let size = [img.width() as _, img.height() as _];
+                                        let pixels = img.as_flat_samples();
+                                        egui::ColorImage::from_rgb(size, pixels.as_slice())
+                                    });
+                                    let _ = tx.send((path_clone, true, color_image));
+                                    ctx.request_repaint();
                                 });
-                                let _ = tx.send((path_clone, true, color_image));
-                                ctx.request_repaint();
-                            });
+                            } else if let Some(ThumbnailState::Loading) = previews.get(frame_path) {
+                                all_loaded = false;
+                            }
                         }
 
-                        ui.heading(format!("Playing {} frames... ({} / {})", group.len(), play_idx + 1, group.len()));
-                        
-                        match previews.get(&play_path) {
-                            Some(ThumbnailState::Loaded(texture)) => {
-                                ui.add(egui::Image::new(texture));
+                        if all_loaded {
+                            let time = ui.input(|i| i.time);
+                            let play_idx = (time * 10.0) as usize % group.len();
+                            let play_path = group[play_idx].path().clone();
+                            ui.heading(format!("Playing {} frames... ({} / {})", group.len(), play_idx + 1, group.len()));
+                            
+                            if let Some(ThumbnailState::Loaded(texture)) = previews.get(&play_path) {
+                                ui.add(egui::Image::new(texture).fit_to_exact_size(egui::vec2(800.0, 600.0)));
                             }
-                            _ => {
-                                if let Some(ThumbnailState::Loaded(mid_tex)) = thumbnails.get(&play_path) {
-                                    ui.add(egui::Image::new(mid_tex).fit_to_exact_size(egui::vec2(800.0, 600.0)));
-                                } else {
-                                    ui.spinner();
+                        } else {
+                            ui.heading(format!("Loading {} frames...", group.len()));
+                            let mut fallback = None;
+                            let mid_path = group[group.len() / 2].path();
+                            
+                            if let Some(ThumbnailState::Loaded(tex)) = previews.get(mid_path) {
+                                fallback = Some(tex);
+                            } else {
+                                for frame in group.iter() {
+                                    if let Some(ThumbnailState::Loaded(tex)) = previews.get(frame.path()) {
+                                        fallback = Some(tex);
+                                        break;
+                                    }
                                 }
+                            }
+                            if fallback.is_none() {
+                                if let Some(ThumbnailState::Loaded(tex)) = thumbnails.get(mid_path) {
+                                    fallback = Some(tex);
+                                } else {
+                                    for frame in group.iter() {
+                                        if let Some(ThumbnailState::Loaded(tex)) = thumbnails.get(frame.path()) {
+                                            fallback = Some(tex);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if let Some(tex) = fallback {
+                                let response = ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(800.0, 600.0)).tint(egui::Color32::from_gray(100)));
+                                let center = response.rect.center();
+                                let spinner_rect = egui::Rect::from_center_size(center, egui::vec2(30.0, 30.0));
+                                ui.put(spinner_rect, egui::Spinner::new());
+                            } else {
+                                let (rect, _resp) = ui.allocate_exact_size(egui::vec2(800.0, 600.0), egui::Sense::hover());
+                                let center = rect.center();
+                                let spinner_rect = egui::Rect::from_center_size(center, egui::vec2(30.0, 30.0));
+                                ui.put(spinner_rect, egui::Spinner::new());
                             }
                         }
                     });
