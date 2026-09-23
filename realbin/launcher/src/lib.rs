@@ -5,7 +5,7 @@ mod sequence_detection;
 
 pub const RUNMODE: &str = "launcher";
 
-use crate::burst::EmbeddedImageType;
+use std::sync::Arc;
 use crate::sequence_detection::{detect_by_time, scan_images};
 use burst::BurstFile;
 use eframe::egui;
@@ -14,7 +14,10 @@ use std::ops::Not;
 use std::path::PathBuf;
 use std::thread::JoinHandle;
 use std::{mem, thread};
+use std::collections::HashMap;
+use std::sync::mpsc;
 use time::Duration;
+use crate::burst::EmbeddedImageType;
 
 pub fn realmain() {
     env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
@@ -37,24 +40,24 @@ pub fn realmain() {
 
 pub enum ThumbnailState {
     Loading,
-    Loaded(eframe::egui::TextureHandle),
+    Loaded(egui::TextureHandle),
 }
 
 struct MyApp {
     state: LauncherState,
-    images: std::collections::HashMap<(PathBuf, crate::burst::EmbeddedImageType), ThumbnailState>,
-    image_rx: std::sync::mpsc::Receiver<(
+    images: HashMap<(PathBuf, EmbeddedImageType), ThumbnailState>,
+    image_rx: mpsc::Receiver<(
         PathBuf,
-        crate::burst::EmbeddedImageType,
-        Option<eframe::egui::ColorImage>,
+        EmbeddedImageType,
+        Option<egui::ColorImage>,
     )>,
-    image_tx: std::sync::mpsc::Sender<(
+    image_tx: mpsc::Sender<(
         PathBuf,
-        crate::burst::EmbeddedImageType,
-        Option<eframe::egui::ColorImage>,
+        EmbeddedImageType,
+        Option<egui::ColorImage>,
     )>,
     thread_limit: usize,
-    thread_pool: Option<std::sync::Arc<rayon::ThreadPool>>,
+    thread_pool: Option<Arc<rayon::ThreadPool>>,
     active_preview: Option<usize>,
 }
 
@@ -74,7 +77,7 @@ enum LauncherState {
 
 impl Default for MyApp {
     fn default() -> Self {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = mpsc::channel();
         Self {
             state: LauncherState::Initial,
             images: Default::default(),
@@ -94,9 +97,9 @@ impl eframe::App for MyApp {
             let key = (path, img_type);
             if let Some(color_image) = color_image_opt {
                 let name = match img_type {
-                    crate::burst::EmbeddedImageType::Preview => "preview",
-                    crate::burst::EmbeddedImageType::Thumbnail => "thumbnail",
-                    crate::burst::EmbeddedImageType::Full => "full",
+                    EmbeddedImageType::Preview => "preview",
+                    EmbeddedImageType::Thumbnail => "thumbnail",
+                    EmbeddedImageType::Full => "full",
                 };
                 let texture =
                     ui.ctx()
@@ -223,11 +226,11 @@ impl MyApp {
         _frame: &mut eframe::Frame,
         files: &mut [Vec<BurstFile>],
         min_frames: &mut usize,
-        images: &mut std::collections::HashMap<(PathBuf, EmbeddedImageType), ThumbnailState>,
+        images: &mut HashMap<(PathBuf, EmbeddedImageType), ThumbnailState>,
         image_tx: &std::sync::mpsc::Sender<(
             PathBuf,
             EmbeddedImageType,
-            Option<eframe::egui::ColorImage>,
+            Option<egui::ColorImage>,
         )>,
         thread_pool: &std::sync::Arc<rayon::ThreadPool>,
         active_preview: &mut Option<usize>,
@@ -274,7 +277,7 @@ impl MyApp {
                                         let path_clone = frame_path.clone();
                                         let ctx = ui.ctx().clone();
                                         thread_pool.spawn(move || {
-                                            use crate::burst::EmbeddedImageType;
+                                            use EmbeddedImageType;
                                             let rgb_opt = BurstFile::extract_embedded_image(
                                                 &path_clone,
                                                 EmbeddedImageType::Thumbnail,
@@ -360,7 +363,7 @@ impl MyApp {
                                 let path_clone = frame_path.clone();
                                 let ctx = ui.ctx().clone();
                                 thread_pool.spawn(move || {
-                                    use crate::burst::EmbeddedImageType;
+                                    use EmbeddedImageType;
                                     let rgb_opt = BurstFile::extract_embedded_image(
                                         &path_clone,
                                         EmbeddedImageType::Preview,
@@ -423,7 +426,7 @@ impl MyApp {
 fn render_fallback_spinner(
     ui: &mut egui::Ui,
     group: &[BurstFile],
-    images: &std::collections::HashMap<(PathBuf, EmbeddedImageType), ThumbnailState>,
+    images: &HashMap<(PathBuf, EmbeddedImageType), ThumbnailState>,
     size: egui::Vec2,
     spinner_size: egui::Vec2,
 ) {
