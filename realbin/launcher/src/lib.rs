@@ -57,7 +57,6 @@ struct MyApp {
         Option<egui::ColorImage>,
     )>,
     thread_limit: usize,
-    thread_pool: Option<Arc<rayon::ThreadPool>>,
     active_preview: Option<usize>,
 }
 
@@ -175,12 +174,10 @@ impl MyApp {
                 if ui.button("Select folder").clicked() {
                     let picked = rfd::FileDialog::new().pick_folder();
                     if let Some(path) = picked {
-                        // Initialize custom rayon thread pool for this launch
-                        let pool = rayon::ThreadPoolBuilder::new()
+                        rayon::ThreadPoolBuilder::new()
                             .num_threads(*thread_limit)
-                            .build()
+                            .build_global()
                             .unwrap();
-                        *thread_pool = Some(std::sync::Arc::new(pool));
 
                         let bd = path.clone();
                         let handle = thread::spawn(|| {

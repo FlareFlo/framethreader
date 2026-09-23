@@ -52,7 +52,7 @@ pub fn extract_exif_exiftool(path: &PathBuf) -> Option<BurstFile> {
 
 pub fn extract_exif_native(path: &PathBuf) -> Option<BurstFile> {
     let file = File::open(path).ok()?;
-    let mut bufreader = std::io::BufReader::new(&file);
+    let mut bufreader = std::io::BufReader::with_capacity(2_usize.pow(14), file);
     let exifreader = exif::Reader::new();
     let exif = exifreader.read_from_container(&mut bufreader).ok()?;
 
