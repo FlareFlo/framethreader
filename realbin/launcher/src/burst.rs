@@ -12,6 +12,7 @@ use time::macros::format_description;
 
 #[derive(Debug, Getters)]
 pub struct BurstFile {
+    #[getset(get = "pub")]
     path: PathBuf,
     #[getset(get = "pub")]
     created: PlainDateTime,
@@ -51,7 +52,7 @@ impl BurstFile {
 
         let header_res = exiftool.wait_with_output().unwrap();
         let offsets = String::from_utf8(header_res.stdout).unwrap();
-        let (start, len) = offsets.split_once("\n").map(|(l,r)|(usize::from_str(l).unwrap(), usize::from_str(r).unwrap())).unwrap();
+        let (start, len) = offsets.split_once("\n").map(|(l,r)|(usize::from_str(l).unwrap(), usize::from_str(r.trim()).unwrap())).unwrap();
         let mut preview_buf = vec![0_u8; len];
         file.seek(SeekFrom::Start(start as _)).unwrap();
         file.read_exact(&mut preview_buf).unwrap();

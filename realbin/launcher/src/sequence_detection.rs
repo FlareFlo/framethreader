@@ -71,7 +71,7 @@ pub fn scan_images(path: PathBuf) -> Vec<BurstFile> {
             let ser: Vec<ExifRaw> = serde_json::from_slice(&res.stdout).unwrap();
             let ser = &ser[0];
             incr(1);
-            BurstFile::new(&path, &ser.create_date, ser.subsec)
+            BurstFile::new(valid_file.path(), &ser.create_date, ser.subsec)
         })
         .collect::<Vec<_>>();
     all_files.sort_unstable_by_key(|k| *k.created());

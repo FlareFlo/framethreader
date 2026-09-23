@@ -36,6 +36,7 @@ pub fn realmain() {
 
 struct MyApp {
     state: LauncherState,
+    thumbnails: std::collections::HashMap<PathBuf, eframe::egui::TextureHandle>,
 }
 
 #[derive(Default)]
@@ -57,6 +58,7 @@ impl Default for MyApp {
     fn default() -> Self {
         Self {
             state: LauncherState::Initial,
+            thumbnails: Default::default(),
         }
     }
 }
@@ -84,7 +86,7 @@ impl eframe::App for MyApp {
                 None
             }
             LauncherState::CompletedScan { files, min_frames } => {
-                Self::show_scan_results(ui, frame, files, min_frames);
+                Self::show_scan_results(ui, frame, files, min_frames, &mut self.thumbnails);
                 None
             }
         };
@@ -146,20 +148,21 @@ impl MyApp {
     pub fn show_scan_results(
         ui: &mut egui::Ui,
         _frame: &mut eframe::Frame,
-        files: &[Vec<BurstFile>],
+        files: &mut [Vec<BurstFile>],
         min_frames: &mut usize,
+        thumbnails: &mut std::collections::HashMap<PathBuf, eframe::egui::TextureHandle>,
     ) {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.heading("Scan Results");
             ui.add(Slider::new(min_frames, 1..=100).text("Min Frames"));
             egui_extras::TableBuilder::new(ui)
                 .striped(true)
-                .column(egui_extras::Column::initial(60.0).at_least(40.0))
+                .column(egui_extras::Column::initial(100.0).at_least(80.0))
                 .column(egui_extras::Column::initial(100.0).at_least(80.0))
                 .column(egui_extras::Column::remainder())
                 .header(20.0, |mut header| {
                     header.col(|ui| {
-                        ui.heading("Group");
+                        ui.heading("Thumbnail");
                     });
                     header.col(|ui| {
                         ui.heading("Length");
@@ -169,13 +172,28 @@ impl MyApp {
                     });
                 })
                 .body(|mut body| {
-                    for (i, group) in files.iter().enumerate() {
+                    for group in files.iter_mut() {
                         if group.len() < *min_frames {
                             continue;
                         }
-                        body.row(20.0, |mut row| {
+                        body.row(80.0, |mut row| {
                             row.col(|ui| {
-                                ui.label(format!("#{}", i + 1));
+                                let mid_idx = group.len() / 2;
+                                let mid_frame = &mut group[mid_idx];
+                                let path = mid_frame.path().clone();
+                                
+                                let texture = thumbnails.entry(path).or_insert_with(|| {
+                                    if mid_frame.thumbnail().is_none() {
+                                        mid_frame.gen_thumbnail();
+                                    }
+                                    let img = mid_frame.thumbnail().as_ref().unwrap();
+                                    let size = [img.width() as _, img.height() as _];
+                                    let pixels = img.as_flat_samples();
+                                    let color_image = egui::ColorImage::from_rgb(size, pixels.as_slice());
+                                    ui.ctx().load_texture("thumbnail", color_image, egui::TextureOptions::LINEAR)
+                                });
+                                
+                                ui.add(egui::Image::new(&*texture).fit_to_exact_size(egui::vec2(80.0, 80.0)));
                             });
                             row.col(|ui| {
                                 ui.label(format!("{} frames", group.len()));
