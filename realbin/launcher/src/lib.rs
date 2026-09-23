@@ -58,6 +58,9 @@ struct MyApp {
     )>,
     thread_limit: usize,
     active_preview: Option<usize>,
+    selected_folder: Option<PathBuf>,
+    exiftool_version: Option<String>,
+    ffmpeg_version: Option<String>,
 }
 
 #[derive(Default)]
@@ -74,6 +77,16 @@ enum LauncherState {
     },
 }
 
+fn get_command_version(cmd: &str, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new(cmd).args(args).output().ok()?;
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Some(stdout.lines().next().unwrap_or("").to_string())
+    } else {
+        None
+    }
+}
+
 impl Default for MyApp {
     fn default() -> Self {
         let (tx, rx) = mpsc::channel();
@@ -84,6 +97,9 @@ impl Default for MyApp {
             image_tx: tx,
             thread_limit: thread::available_parallelism().unwrap().get(),
             active_preview: None,
+            selected_folder: None,
+            exiftool_version: get_command_version("exiftool", &["-ver"]),
+            ffmpeg_version: get_command_version("ffmpeg", &["-version"]),
         }
     }
 }
@@ -124,7 +140,14 @@ impl eframe::App for MyApp {
         // Only render UI here
         let new_state = match &mut self.state {
             LauncherState::Initial => {
-                Self::initial_picker(ui, frame, &mut self.thread_limit)
+                Self::initial_picker(
+                    ui, 
+                    frame, 
+                    &mut self.thread_limit, 
+                    &mut self.selected_folder,
+                    &self.exiftool_version,
+                    &self.ffmpeg_version
+                )
             }
             LauncherState::Scanning { .. } => {
                 Self::scan_basedir(ui, frame);
@@ -155,39 +178,113 @@ impl MyApp {
         ui: &mut egui::Ui,
         _frame: &mut eframe::Frame,
         thread_limit: &mut usize,
+        selected_folder: &mut Option<PathBuf>,
+        exiftool_version: &Option<String>,
+        ffmpeg_version: &Option<String>,
     ) -> Option<LauncherState> {
-        egui::CentralPanel::default()
-            .show(ui, |ui| {
-                ui.heading("Framethreader");
+        let mut result = None;
 
-                ui.add(
-                    egui::Slider::new(
-                        thread_limit,
-                        1..=thread::available_parallelism().unwrap().get(),
-                    )
-                    .text("Global Thread Limit"),
-                );
+        egui::CentralPanel::default().show(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(40.0);
+                ui.label(egui::RichText::new("Framethreader").strong().size(40.0));
+                ui.add_space(30.0);
 
-                if ui.button("Select folder").clicked() {
-                    let picked = rfd::FileDialog::new().pick_folder();
-                    if let Some(path) = picked {
-                        rayon::ThreadPoolBuilder::new()
-                            .num_threads(*thread_limit)
-                            .build_global()
-                            .unwrap();
+                ui.allocate_ui_with_layout(
+                    egui::vec2(450.0, ui.available_height()),
+                    egui::Layout::top_down(egui::Align::Center),
+                    |ui| {
+                        // Dependencies Card
+                        egui::Frame::group(ui.style())
+                            .fill(ui.visuals().window_fill())
+                            .inner_margin(16.0)
+                            .show(ui, |ui| {
+                                ui.set_min_width(420.0);
+                                ui.label(egui::RichText::new("Dependencies").strong().size(18.0));
+                                ui.add_space(10.0);
 
-                        let bd = path.clone();
-                        let handle = thread::spawn(|| {
-                            let images = scan_images(bd);
-                            let frames = detect_by_time(images, Duration::milliseconds(300));
-                            frames
+                                ui.horizontal(|ui| {
+                                    if let Some(ver) = exiftool_version {
+                                        ui.label(egui::RichText::new("exiftool").color(egui::Color32::GREEN));
+                                        ui.label(ver);
+                                    } else {
+                                        ui.label(egui::RichText::new("❌ exiftool").color(egui::Color32::RED));
+                                        ui.label("Not found (Optional for now)");
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    if let Some(ver) = ffmpeg_version {
+                                        ui.label(egui::RichText::new("ffmpeg").color(egui::Color32::GREEN));
+                                        ui.label(ver);
+                                    } else {
+                                        ui.label(egui::RichText::new("❌ ffmpeg").color(egui::Color32::RED));
+                                        ui.label("Not found");
+                                    }
+                                });
+                            });
+
+                        ui.add_space(20.0);
+
+                        // Settings Card
+                        egui::Frame::group(ui.style())
+                            .fill(ui.visuals().window_fill())
+                            .inner_margin(16.0)
+                            .show(ui, |ui| {
+                                ui.set_min_width(420.0);
+                                ui.label(egui::RichText::new("Settings").strong().size(18.0));
+                                ui.add_space(10.0);
+
+                                ui.add(
+                                    egui::Slider::new(
+                                        thread_limit,
+                                        1..=thread::available_parallelism().unwrap().get(),
+                                    )
+                                    .text("Global Thread Limit"),
+                                );
+                            });
+
+                        ui.add_space(40.0);
+
+                        // Action Area
+                        ui.vertical_centered(|ui| {
+                            if ui.add_sized([220.0, 40.0], egui::Button::new(egui::RichText::new("📁 Select Folder").size(16.0))).clicked() {
+                                let picked = rfd::FileDialog::new().pick_folder();
+                                if let Some(path) = picked {
+                                    *selected_folder = Some(path);
+                                }
+                            }
+
+                            ui.add_space(10.0);
+
+                            if let Some(path) = selected_folder {
+                                ui.label(egui::RichText::new(format!("Selected: {}", path.display())).weak());
+                                ui.add_space(20.0);
+
+                                let scan_btn = egui::Button::new(egui::RichText::new("Start Scan").strong().size(24.0))
+                                    .fill(ui.visuals().selection.bg_fill);
+                                if ui.add_sized([300.0, 60.0], scan_btn).clicked() {
+                                    let _ = rayon::ThreadPoolBuilder::new()
+                                        .num_threads(*thread_limit)
+                                        .build_global();
+
+                                    let bd = path.clone();
+                                    let handle = thread::spawn(|| {
+                                        let images = scan_images(bd);
+                                        let frames = detect_by_time(images, Duration::milliseconds(300));
+                                        frames
+                                    });
+                                    result = Some(LauncherState::Scanning { path: path.clone(), handle });
+                                }
+                            } else {
+                                ui.label(egui::RichText::new("No folder selected").weak());
+                            }
                         });
-                        return Some(LauncherState::Scanning { path, handle });
-                    }
-                }
-                None
-            })
-            .inner
+                    },
+                );
+            });
+        });
+
+        result
     }
 
     pub fn scan_basedir(ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
