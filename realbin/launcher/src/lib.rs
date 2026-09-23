@@ -40,12 +40,18 @@ pub enum ThumbnailState {
     Loaded(eframe::egui::TextureHandle),
 }
 
+pub struct ImageLoadRequest {
+    pub path: PathBuf,
+    pub is_preview: bool,
+    pub ctx: egui::Context,
+}
+
 struct MyApp {
     state: LauncherState,
     thumbnails: std::collections::HashMap<PathBuf, ThumbnailState>,
     previews: std::collections::HashMap<PathBuf, ThumbnailState>,
-    image_tx: std::sync::mpsc::Sender<(PathBuf, bool, Option<eframe::egui::ColorImage>)>,
     image_rx: std::sync::mpsc::Receiver<(PathBuf, bool, Option<eframe::egui::ColorImage>)>,
+    request_tx: std::sync::mpsc::Sender<ImageLoadRequest>,
     active_preview: Option<usize>,
 }
 
@@ -66,12 +72,43 @@ enum LauncherState {
 impl Default for MyApp {
     fn default() -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
+        let (req_tx, req_rx) = std::sync::mpsc::channel::<ImageLoadRequest>();
+        let req_rx = std::sync::Arc::new(std::sync::Mutex::new(req_rx));
+        
+        for _ in 0..4 {
+            let rx_clone = req_rx.clone();
+            let tx_clone = tx.clone();
+            std::thread::spawn(move || {
+                loop {
+                    let req = {
+                        let Ok(lock) = rx_clone.lock() else { break };
+                        match lock.recv() {
+                            Ok(req) => req,
+                            Err(_) => break,
+                        }
+                    };
+                    
+                    use crate::burst::EmbeddedImageType;
+                    let img_type = if req.is_preview { EmbeddedImageType::Preview } else { EmbeddedImageType::Thumbnail };
+                    let rgb_opt = BurstFile::extract_embedded_image(&req.path, img_type);
+                    let color_image = rgb_opt.map(|img| {
+                        let size = [img.width() as _, img.height() as _];
+                        let pixels = img.as_flat_samples();
+                        egui::ColorImage::from_rgb(size, pixels.as_slice())
+                    });
+                    
+                    let _ = tx_clone.send((req.path, req.is_preview, color_image));
+                    req.ctx.request_repaint();
+                }
+            });
+        }
+
         Self {
             state: LauncherState::Initial,
             thumbnails: Default::default(),
             previews: Default::default(),
-            image_tx: tx,
             image_rx: rx,
+            request_tx: req_tx,
             active_preview: None,
         }
     }
@@ -122,7 +159,7 @@ impl eframe::App for MyApp {
                 None
             }
             LauncherState::CompletedScan { files, min_frames } => {
-                Self::show_scan_results(ui, frame, files, min_frames, &mut self.thumbnails, &mut self.previews, &self.image_tx, &mut self.active_preview);
+                Self::show_scan_results(ui, frame, files, min_frames, &mut self.thumbnails, &mut self.previews, &self.request_tx, &mut self.active_preview);
                 None
             }
         };
@@ -188,7 +225,7 @@ impl MyApp {
         min_frames: &mut usize,
         thumbnails: &mut std::collections::HashMap<PathBuf, ThumbnailState>,
         previews: &mut std::collections::HashMap<PathBuf, ThumbnailState>,
-        image_tx: &std::sync::mpsc::Sender<(PathBuf, bool, Option<eframe::egui::ColorImage>)>,
+        request_tx: &std::sync::mpsc::Sender<ImageLoadRequest>,
         active_preview: &mut Option<usize>,
     ) {
         egui::CentralPanel::default().show(ui, |ui| {
@@ -219,19 +256,10 @@ impl MyApp {
                                     if !thumbnails.contains_key(frame_path) {
                                         thumbnails.insert(frame_path.clone(), ThumbnailState::Loading);
                                         all_loaded = false;
-                                        let tx = image_tx.clone();
-                                        let path_clone = frame_path.clone();
-                                        let ctx = ui.ctx().clone();
-                                        std::thread::spawn(move || {
-                                            use crate::burst::EmbeddedImageType;
-                                            let rgb_opt = BurstFile::extract_embedded_image(&path_clone, EmbeddedImageType::Thumbnail);
-                                            let color_image = rgb_opt.map(|img| {
-                                                let size = [img.width() as _, img.height() as _];
-                                                let pixels = img.as_flat_samples();
-                                                egui::ColorImage::from_rgb(size, pixels.as_slice())
-                                            });
-                                            let _ = tx.send((path_clone, false, color_image));
-                                            ctx.request_repaint();
+                                        let _ = request_tx.send(ImageLoadRequest {
+                                            path: frame_path.clone(),
+                                            is_preview: false,
+                                            ctx: ui.ctx().clone(),
                                         });
                                     } else if let Some(ThumbnailState::Loading) = thumbnails.get(frame_path) {
                                         all_loaded = false;
@@ -246,30 +274,7 @@ impl MyApp {
                                         ui.add(egui::Image::new(texture).fit_to_exact_size(egui::vec2(160.0, 120.0)));
                                     }
                                 } else {
-                                    let mut fallback = None;
-                                    let mid_path = group[group.len() / 2].path();
-                                    if let Some(ThumbnailState::Loaded(tex)) = thumbnails.get(mid_path) {
-                                        fallback = Some(tex);
-                                    } else {
-                                        for frame in group.iter() {
-                                            if let Some(ThumbnailState::Loaded(tex)) = thumbnails.get(frame.path()) {
-                                                fallback = Some(tex);
-                                                break;
-                                            }
-                                        }
-                                    }
-
-                                    if let Some(tex) = fallback {
-                                        let response = ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(160.0, 120.0)).tint(egui::Color32::from_gray(100)));
-                                        let center = response.rect.center();
-                                        let spinner_rect = egui::Rect::from_center_size(center, egui::vec2(20.0, 20.0));
-                                        ui.put(spinner_rect, egui::Spinner::new());
-                                    } else {
-                                        let (rect, _resp) = ui.allocate_exact_size(egui::vec2(160.0, 120.0), egui::Sense::hover());
-                                        let center = rect.center();
-                                        let spinner_rect = egui::Rect::from_center_size(center, egui::vec2(20.0, 20.0));
-                                        ui.put(spinner_rect, egui::Spinner::new());
-                                    }
+                                    render_fallback_spinner(ui, group, thumbnails, None, egui::vec2(160.0, 120.0), egui::vec2(20.0, 20.0));
                                 }
                             });
                             row.col(|ui| {
@@ -308,19 +313,10 @@ impl MyApp {
                             if !previews.contains_key(frame_path) {
                                 previews.insert(frame_path.clone(), ThumbnailState::Loading);
                                 all_loaded = false;
-                                let tx = image_tx.clone();
-                                let path_clone = frame_path.clone();
-                                let ctx = ui.ctx().clone();
-                                std::thread::spawn(move || {
-                                    use crate::burst::EmbeddedImageType;
-                                    let rgb_opt = BurstFile::extract_embedded_image(&path_clone, EmbeddedImageType::Preview);
-                                    let color_image = rgb_opt.map(|img| {
-                                        let size = [img.width() as _, img.height() as _];
-                                        let pixels = img.as_flat_samples();
-                                        egui::ColorImage::from_rgb(size, pixels.as_slice())
-                                    });
-                                    let _ = tx.send((path_clone, true, color_image));
-                                    ctx.request_repaint();
+                                let _ = request_tx.send(ImageLoadRequest {
+                                    path: frame_path.clone(),
+                                    is_preview: true,
+                                    ctx: ui.ctx().clone(),
                                 });
                             } else if let Some(ThumbnailState::Loading) = previews.get(frame_path) {
                                 all_loaded = false;
@@ -338,43 +334,7 @@ impl MyApp {
                             }
                         } else {
                             ui.heading(format!("Loading {} frames...", group.len()));
-                            let mut fallback = None;
-                            let mid_path = group[group.len() / 2].path();
-                            
-                            if let Some(ThumbnailState::Loaded(tex)) = previews.get(mid_path) {
-                                fallback = Some(tex);
-                            } else {
-                                for frame in group.iter() {
-                                    if let Some(ThumbnailState::Loaded(tex)) = previews.get(frame.path()) {
-                                        fallback = Some(tex);
-                                        break;
-                                    }
-                                }
-                            }
-                            if fallback.is_none() {
-                                if let Some(ThumbnailState::Loaded(tex)) = thumbnails.get(mid_path) {
-                                    fallback = Some(tex);
-                                } else {
-                                    for frame in group.iter() {
-                                        if let Some(ThumbnailState::Loaded(tex)) = thumbnails.get(frame.path()) {
-                                            fallback = Some(tex);
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-
-                            if let Some(tex) = fallback {
-                                let response = ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(800.0, 600.0)).tint(egui::Color32::from_gray(100)));
-                                let center = response.rect.center();
-                                let spinner_rect = egui::Rect::from_center_size(center, egui::vec2(30.0, 30.0));
-                                ui.put(spinner_rect, egui::Spinner::new());
-                            } else {
-                                let (rect, _resp) = ui.allocate_exact_size(egui::vec2(800.0, 600.0), egui::Sense::hover());
-                                let center = rect.center();
-                                let spinner_rect = egui::Rect::from_center_size(center, egui::vec2(30.0, 30.0));
-                                ui.put(spinner_rect, egui::Spinner::new());
-                            }
+                            render_fallback_spinner(ui, group, thumbnails, Some(previews), egui::vec2(800.0, 600.0), egui::vec2(30.0, 30.0));
                         }
                     });
             }
@@ -382,5 +342,55 @@ impl MyApp {
         if !preview_open {
             *active_preview = None;
         }
+    }
+}
+
+fn render_fallback_spinner(
+    ui: &mut egui::Ui,
+    group: &[BurstFile],
+    thumbnails: &std::collections::HashMap<PathBuf, ThumbnailState>,
+    previews: Option<&std::collections::HashMap<PathBuf, ThumbnailState>>,
+    size: egui::Vec2,
+    spinner_size: egui::Vec2,
+) {
+    let mut fallback = None;
+    let mid_path = group[group.len() / 2].path();
+    
+    if let Some(prevs) = previews {
+        if let Some(ThumbnailState::Loaded(tex)) = prevs.get(mid_path) {
+            fallback = Some(tex);
+        } else {
+            for frame in group.iter() {
+                if let Some(ThumbnailState::Loaded(tex)) = prevs.get(frame.path()) {
+                    fallback = Some(tex);
+                    break;
+                }
+            }
+        }
+    }
+    
+    if fallback.is_none() {
+        if let Some(ThumbnailState::Loaded(tex)) = thumbnails.get(mid_path) {
+            fallback = Some(tex);
+        } else {
+            for frame in group.iter() {
+                if let Some(ThumbnailState::Loaded(tex)) = thumbnails.get(frame.path()) {
+                    fallback = Some(tex);
+                    break;
+                }
+            }
+        }
+    }
+
+    if let Some(tex) = fallback {
+        let response = ui.add(egui::Image::new(tex).fit_to_exact_size(size).tint(egui::Color32::from_gray(100)));
+        let center = response.rect.center();
+        let spinner_rect = egui::Rect::from_center_size(center, spinner_size);
+        ui.put(spinner_rect, egui::Spinner::new());
+    } else {
+        let (rect, _resp) = ui.allocate_exact_size(size, egui::Sense::hover());
+        let center = rect.center();
+        let spinner_rect = egui::Rect::from_center_size(center, spinner_size);
+        ui.put(spinner_rect, egui::Spinner::new());
     }
 }
