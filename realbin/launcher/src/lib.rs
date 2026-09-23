@@ -83,7 +83,6 @@ impl Default for MyApp {
             image_rx: rx,
             image_tx: tx,
             thread_limit: thread::available_parallelism().unwrap().get(),
-            thread_pool: None,
             active_preview: None,
         }
     }
@@ -125,7 +124,7 @@ impl eframe::App for MyApp {
         // Only render UI here
         let new_state = match &mut self.state {
             LauncherState::Initial => {
-                Self::initial_picker(ui, frame, &mut self.thread_limit, &mut self.thread_pool)
+                Self::initial_picker(ui, frame, &mut self.thread_limit)
             }
             LauncherState::Scanning { .. } => {
                 Self::scan_basedir(ui, frame);
@@ -139,7 +138,6 @@ impl eframe::App for MyApp {
                     min_frames,
                     &mut self.images,
                     &self.image_tx,
-                    self.thread_pool.as_ref().unwrap(),
                     &mut self.active_preview,
                 );
                 None
@@ -157,7 +155,6 @@ impl MyApp {
         ui: &mut egui::Ui,
         _frame: &mut eframe::Frame,
         thread_limit: &mut usize,
-        thread_pool: &mut Option<std::sync::Arc<rayon::ThreadPool>>,
     ) -> Option<LauncherState> {
         egui::CentralPanel::default()
             .show(ui, |ui| {
@@ -229,7 +226,6 @@ impl MyApp {
             EmbeddedImageType,
             Option<egui::ColorImage>,
         )>,
-        thread_pool: &std::sync::Arc<rayon::ThreadPool>,
         active_preview: &mut Option<usize>,
     ) {
         egui::CentralPanel::default().show(ui, |ui| {
@@ -273,7 +269,7 @@ impl MyApp {
                                         let tx = image_tx.clone();
                                         let path_clone = frame_path.clone();
                                         let ctx = ui.ctx().clone();
-                                        thread_pool.spawn(move || {
+                                        rayon::spawn(move || {
                                             use EmbeddedImageType;
                                             let rgb_opt = BurstFile::extract_embedded_image(
                                                 &path_clone,
@@ -359,7 +355,7 @@ impl MyApp {
                                 let tx = image_tx.clone();
                                 let path_clone = frame_path.clone();
                                 let ctx = ui.ctx().clone();
-                                thread_pool.spawn(move || {
+                                rayon::spawn(move || {
                                     use EmbeddedImageType;
                                     let rgb_opt = BurstFile::extract_embedded_image(
                                         &path_clone,
