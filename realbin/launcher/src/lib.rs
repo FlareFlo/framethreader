@@ -1,23 +1,22 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
 mod sequence_detection;
+mod burst;
 
 pub const RUNMODE: &str = "launcher";
 
-use crate::sequence_detection::{BurstFile, detect_by_time, scan_images};
+use crate::sequence_detection::{detect_by_time, scan_images};
+use burst::BurstFile;
 use eframe::egui;
 use egui::{ProgressBar, Slider};
 use std::ops::Not;
-use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
 use std::thread::JoinHandle;
 use std::{mem, thread};
 use time::Duration;
 
 pub fn realmain() {
-    env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
+	env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([320.0, 240.0]),
         ..Default::default()
@@ -183,7 +182,7 @@ impl MyApp {
                             });
                             row.col(|ui| {
                                 if let (Some(first), Some(last)) = (group.first(), group.last()) {
-                                    let duration = last.created - first.created;
+                                    let duration = *last.created() - *first.created();
                                     ui.label(format!("{:.2}s", duration.as_seconds_f32()));
                                 } else {
                                     ui.label("-");

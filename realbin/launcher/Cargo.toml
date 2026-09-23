@@ -14,3 +14,4 @@ serde_json = {workspace = true}
 time = {workspace = true}
 indicatif = {workspace = true}
 rayon = {workspace = true}
+getset = {workspace = true}

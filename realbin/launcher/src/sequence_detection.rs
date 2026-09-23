@@ -1,25 +1,22 @@
-use indicatif::{ProgressBar, ProgressIterator};
-use rayon::iter::IntoParallelIterator;
+use crate::burst::BurstFile;
+use indicatif::ProgressIterator;
 use rayon::iter::ParallelBridge;
 use rayon::iter::ParallelIterator;
 use serde::{Deserialize, Deserializer};
-use std::fs;
 use std::fs::File;
-use std::io::{BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::ops::Add;
-use std::path::Component::CurDir;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use time::format_description::well_known;
 use time::macros::format_description;
-use time::{Duration, PlainDateTime, Time};
+use time::{Duration, PlainDateTime};
 
 static ACCEPTED_IMAGE_EXTENSIONS: &[&str] = &["ARW", "HEIC", "JPG", "HEIF"];
 
 #[derive(serde::Deserialize, Debug)]
 struct ExifRaw {
-    #[serde(rename = "CreateDate")]
+	#[serde(rename = "CreateDate")]
     create_date: String,
     #[serde(
         rename = "SubSecTimeOriginal",
@@ -28,15 +25,7 @@ struct ExifRaw {
     subsec: u16,
 }
 
-#[derive(Debug)]
-pub struct BurstFile {
-    pub path: PathBuf,
-    pub created: PlainDateTime,
-}
-
 pub fn scan_images(path: PathBuf) -> Vec<BurstFile> {
-    let datefmt = format_description!("[year]:[month]:[day] [hour]:[minute]:[second]");
-
     let valid_files = path
         .read_dir()
         .unwrap()
@@ -82,16 +71,10 @@ pub fn scan_images(path: PathBuf) -> Vec<BurstFile> {
             let ser: Vec<ExifRaw> = serde_json::from_slice(&res.stdout).unwrap();
             let ser = &ser[0];
             incr(1);
-            BurstFile {
-                path: valid_file.path(),
-                created: PlainDateTime::parse(&ser.create_date, &datefmt)
-                    .unwrap()
-                    .replace_microsecond(ser.subsec as u32 * 1000)
-                    .unwrap(),
-            }
+            BurstFile::new(&path, &ser.create_date, ser.subsec)
         })
         .collect::<Vec<_>>();
-    all_files.sort_unstable_by_key(|k| k.created);
+    all_files.sort_unstable_by_key(|k| *k.created());
     all_files
 }
 
@@ -100,8 +83,8 @@ pub fn detect_by_time(frames: Vec<BurstFile>, threshold: Duration) -> Vec<Vec<Bu
     let mut last_td = PlainDateTime::MIN;
     let mut current_burst = vec![];
     for frame in frames {
-        let created_now = frame.created;
-        if last_td.add(threshold) >= frame.created {
+        let created_now = *frame.created();
+        if last_td.add(threshold) >= *frame.created() {
             current_burst.push(frame);
         } else {
             bursts.push(current_burst);
