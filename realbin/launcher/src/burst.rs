@@ -16,8 +16,6 @@ pub struct BurstFile {
     path: PathBuf,
     #[getset(get = "pub")]
     created: PlainDateTime,
-    #[getset(get = "pub")]
-    thumbnail: Option<RgbImage>,
 }
 
 impl BurstFile {
@@ -31,7 +29,6 @@ impl BurstFile {
                 .unwrap()
                 .replace_microsecond(subsec as u32 * 1000)
                 .unwrap(),
-            thumbnail: None,
         }
     }
 
@@ -59,9 +56,5 @@ impl BurstFile {
         file.seek(SeekFrom::Start(start as _)).ok()?;
         file.read_exact(&mut preview_buf).ok()?;
         Some(image::load_from_memory_with_format(&preview_buf, ImageFormat::Jpeg).ok()?.into_rgb8())
-    }
-
-    pub fn gen_thumbnail(&mut self) {
-        self.thumbnail = Self::extract_thumbnail(&self.path);
     }
 }
