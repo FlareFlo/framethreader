@@ -24,6 +24,69 @@ struct ExifRaw {
     subsec: u16,
 }
 
+pub fn extract_exif_exiftool(path: &PathBuf) -> Option<BurstFile> {
+    let mut head = File::open(path).unwrap();
+    let mut buf = vec![0u8; 2usize.pow(16)];
+    let n = head.read(buf.as_mut_slice()).unwrap_or(0);
+    if n == 0 { return None; }
+
+    let mut exiftool = Command::new("exiftool")
+        .args(["-json", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdin = exiftool.stdin.as_mut().unwrap();
+    stdin.write_all(&buf[..n]).unwrap();
+
+    let res = exiftool.wait_with_output().unwrap();
+    if res.stdout.is_empty() { return None; }
+    let ser: Result<Vec<ExifRaw>, _> = serde_json::from_slice(&res.stdout);
+    if let Ok(ser) = ser {
+        if let Some(s) = ser.first() {
+            return Some(BurstFile::new(path.clone(), &s.create_date, s.subsec));
+        }
+    }
+    None
+}
+
+pub fn extract_exif_native(path: &PathBuf) -> Option<BurstFile> {
+    let file = File::open(path).ok()?;
+    let mut bufreader = std::io::BufReader::new(&file);
+    let exifreader = exif::Reader::new();
+    let exif = exifreader.read_from_container(&mut bufreader).ok()?;
+
+    let create_date = exif
+        .get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
+        .or_else(|| exif.get_field(exif::Tag::DateTimeDigitized, exif::In::PRIMARY))
+        .or_else(|| exif.get_field(exif::Tag::DateTime, exif::In::PRIMARY))?;
+    
+    // The date format is usually "YYYY:MM:DD HH:MM:SS"
+    let create_date_str = match create_date.value {
+        exif::Value::Ascii(ref vec) if !vec.is_empty() => {
+            std::str::from_utf8(&vec[0]).unwrap_or("").trim_end_matches('\0').to_string()
+        }
+        _ => return None,
+    };
+
+    let subsec = exif.get_field(exif::Tag::SubSecTimeOriginal, exif::In::PRIMARY);
+    let subsec_val = if let Some(sub) = subsec {
+        match sub.value {
+            exif::Value::Ascii(ref vec) if !vec.is_empty() => {
+                let s = std::str::from_utf8(&vec[0]).unwrap_or("").trim_end_matches('\0');
+                s.parse::<u16>().unwrap_or(0)
+            }
+            exif::Value::Short(ref vec) if !vec.is_empty() => vec[0] as u16,
+            exif::Value::Long(ref vec) if !vec.is_empty() => vec[0] as u16,
+            _ => 0,
+        }
+    } else {
+        0
+    };
+
+    Some(BurstFile::new(path.clone(), &create_date_str, subsec_val))
+}
+
 pub fn scan_images(path: PathBuf) -> Vec<BurstFile> {
     let valid_files = path
         .read_dir()
@@ -49,28 +112,14 @@ pub fn scan_images(path: PathBuf) -> Vec<BurstFile> {
         .into_iter()
         .progress_count(len as _)
         .par_bridge()
-        .map(|valid_file| {
+        .filter_map(|valid_file| {
             set_current_file(valid_file.path().display().to_string());
-            let mut head = File::open(&valid_file.path()).unwrap();
-            let mut buf = vec![0u8; 2usize.pow(16)];
-            head.read_exact(buf.as_mut_slice()).unwrap();
-
-            let mut exiftool = Command::new("exiftool")
-                .args(["-json", "-"])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .spawn()
-                .unwrap();
-            let stdin = exiftool.stdin.as_mut().unwrap();
-            stdin.write_all(&buf).unwrap();
-
-            let res = exiftool.wait_with_output().unwrap();
-            // eprintln!("{}", String::from_utf8(res.stdout.clone()).unwrap());
-            // fs::write("out.json", res.stdout.clone()).unwrap();
-            let ser: Vec<ExifRaw> = serde_json::from_slice(&res.stdout).unwrap();
-            let ser = &ser[0];
+            
+            // Swap this between extract_exif_native and extract_exif_exiftool
+            let res = extract_exif_native(&valid_file.path());
+            
             incr(1);
-            BurstFile::new(valid_file.path(), &ser.create_date, ser.subsec)
+            res
         })
         .collect::<Vec<_>>();
     all_files.sort_unstable_by_key(|k| *k.created());

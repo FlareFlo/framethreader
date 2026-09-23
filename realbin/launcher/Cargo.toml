@@ -16,3 +16,4 @@ indicatif = {workspace = true}
 rayon = {workspace = true}
 getset = {workspace = true}
 image  = { workspace = true}
+kamadak-exif = {workspace = true}
