@@ -19,7 +19,7 @@ use crate::burst::EmbeddedImageType;
 pub fn realmain() {
 	env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([320.0, 240.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1024.0, 768.0]),
         ..Default::default()
     };
     eframe::run_native(
@@ -46,6 +46,7 @@ struct MyApp {
     previews: std::collections::HashMap<PathBuf, ThumbnailState>,
     image_tx: std::sync::mpsc::Sender<(PathBuf, bool, Option<eframe::egui::ColorImage>)>,
     image_rx: std::sync::mpsc::Receiver<(PathBuf, bool, Option<eframe::egui::ColorImage>)>,
+    active_preview: Option<usize>,
 }
 
 #[derive(Default)]
@@ -71,6 +72,7 @@ impl Default for MyApp {
             previews: Default::default(),
             image_tx: tx,
             image_rx: rx,
+            active_preview: None,
         }
     }
 }
@@ -120,7 +122,7 @@ impl eframe::App for MyApp {
                 None
             }
             LauncherState::CompletedScan { files, min_frames } => {
-                Self::show_scan_results(ui, frame, files, min_frames, &mut self.thumbnails, &mut self.previews, &self.image_tx);
+                Self::show_scan_results(ui, frame, files, min_frames, &mut self.thumbnails, &mut self.previews, &self.image_tx, &mut self.active_preview);
                 None
             }
         };
@@ -187,6 +189,7 @@ impl MyApp {
         thumbnails: &mut std::collections::HashMap<PathBuf, ThumbnailState>,
         previews: &mut std::collections::HashMap<PathBuf, ThumbnailState>,
         image_tx: &std::sync::mpsc::Sender<(PathBuf, bool, Option<eframe::egui::ColorImage>)>,
+        active_preview: &mut Option<usize>,
     ) {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.heading("Scan Results");
@@ -195,28 +198,24 @@ impl MyApp {
                 .striped(true)
                 .column(egui_extras::Column::initial(160.0).at_least(160.0))
                 .column(egui_extras::Column::initial(100.0).at_least(80.0))
+                .column(egui_extras::Column::initial(100.0).at_least(80.0))
                 .column(egui_extras::Column::remainder())
                 .header(20.0, |mut header| {
-                    header.col(|ui| {
-                        ui.heading("Thumbnail");
-                    });
-                    header.col(|ui| {
-                        ui.heading("Length");
-                    });
-                    header.col(|ui| {
-                        ui.heading("Duration");
-                    });
+                    header.col(|ui| { ui.heading("Thumbnail"); });
+                    header.col(|ui| { ui.heading("Length"); });
+                    header.col(|ui| { ui.heading("Duration"); });
+                    header.col(|ui| { ui.heading("Actions"); });
                 })
                 .body(|mut body| {
-                    for group in files.iter_mut() {
+                    for (i, group) in files.iter_mut().enumerate() {
                         if group.len() < *min_frames {
                             continue;
                         }
                         body.row(120.0, |mut row| {
                             row.col(|ui| {
-                                let mid_idx = group.len() / 2;
-                                let mid_frame = &mut group[mid_idx];
-                                let path = mid_frame.path().clone();
+                                let time = ui.input(|i| i.time);
+                                let play_idx = (time * 10.0) as usize % group.len();
+                                let path = group[play_idx].path().clone();
                                 
                                 if !thumbnails.contains_key(&path) {
                                     thumbnails.insert(path.clone(), ThumbnailState::Loading);
@@ -236,58 +235,13 @@ impl MyApp {
                                     });
                                 }
                                 
-                                let response = match thumbnails.get(&path) {
+                                match thumbnails.get(&path) {
                                     Some(ThumbnailState::Loaded(texture)) => {
-                                        ui.add(egui::Image::new(texture).fit_to_exact_size(egui::vec2(160.0, 120.0)))
+                                        ui.add(egui::Image::new(texture).fit_to_exact_size(egui::vec2(160.0, 120.0)));
                                     }
-                                    Some(ThumbnailState::Loading) => {
-                                        ui.spinner()
+                                    _ => {
+                                        ui.spinner();
                                     }
-                                    None => ui.label("..."),
-                                };
-
-                                if response.hovered() {
-                                    let time = ui.input(|i| i.time);
-                                    let play_idx = (time * 10.0) as usize % group.len();
-                                    let hover_path = group[play_idx].path().clone();
-                                    
-                                    if !previews.contains_key(&hover_path) {
-                                        previews.insert(hover_path.clone(), ThumbnailState::Loading);
-                                        let tx = image_tx.clone();
-                                        let path_clone = hover_path.clone();
-                                        let ctx = ui.ctx().clone();
-                                        std::thread::spawn(move || {
-                                            use crate::burst::EmbeddedImageType;
-                                            let rgb_opt = BurstFile::extract_embedded_image(&path_clone, EmbeddedImageType::Preview);
-                                            let color_image = rgb_opt.map(|img| {
-                                                let size = [img.width() as _, img.height() as _];
-                                                let pixels = img.as_flat_samples();
-                                                egui::ColorImage::from_rgb(size, pixels.as_slice())
-                                            });
-                                            let _ = tx.send((path_clone, true, color_image));
-                                            ctx.request_repaint();
-                                        });
-                                    }
-                                    
-                                    response.on_hover_ui(|ui| {
-                                        ui.heading(format!("Playing {} frames... ({} / {})", group.len(), play_idx + 1, group.len()));
-                                        match previews.get(&hover_path) {
-                                            Some(ThumbnailState::Loaded(hover_tex)) => {
-                                                ui.add(egui::Image::new(hover_tex));
-                                            }
-                                            _ => {
-                                                // Fallback to middle frame thumbnail if preview isn't ready
-                                                if let Some(ThumbnailState::Loaded(mid_tex)) = thumbnails.get(&path) {
-                                                    ui.add(egui::Image::new(mid_tex));
-                                                }
-                                                ui.horizontal(|ui| {
-                                                    ui.spinner();
-                                                    ui.label("Loading preview...");
-                                                });
-                                            }
-                                        }
-                                        ui.ctx().request_repaint();
-                                    });
                                 }
                             });
                             row.col(|ui| {
@@ -301,9 +255,66 @@ impl MyApp {
                                     ui.label("-");
                                 }
                             });
+                            row.col(|ui| {
+                                if ui.button("Preview Sequence").clicked() {
+                                    *active_preview = Some(i);
+                                }
+                            });
                         });
                     }
                 });
         });
+
+        ui.ctx().request_repaint(); // always animate the table
+
+        let mut preview_open = active_preview.is_some();
+        if let Some(idx) = *active_preview {
+            if let Some(group) = files.get(idx) {
+                egui::Window::new(format!("Sequence Preview: Group {}", idx + 1))
+                    .open(&mut preview_open)
+                    .default_size(egui::vec2(800.0, 600.0))
+                    .show(ui.ctx(), |ui| {
+                        let time = ui.input(|i| i.time);
+                        let play_idx = (time * 10.0) as usize % group.len();
+                        let play_path = group[play_idx].path().clone();
+
+                        if !previews.contains_key(&play_path) {
+                            previews.insert(play_path.clone(), ThumbnailState::Loading);
+                            let tx = image_tx.clone();
+                            let path_clone = play_path.clone();
+                            let ctx = ui.ctx().clone();
+                            std::thread::spawn(move || {
+                                use crate::burst::EmbeddedImageType;
+                                let rgb_opt = BurstFile::extract_embedded_image(&path_clone, EmbeddedImageType::Preview);
+                                let color_image = rgb_opt.map(|img| {
+                                    let size = [img.width() as _, img.height() as _];
+                                    let pixels = img.as_flat_samples();
+                                    egui::ColorImage::from_rgb(size, pixels.as_slice())
+                                });
+                                let _ = tx.send((path_clone, true, color_image));
+                                ctx.request_repaint();
+                            });
+                        }
+
+                        ui.heading(format!("Playing {} frames... ({} / {})", group.len(), play_idx + 1, group.len()));
+                        
+                        match previews.get(&play_path) {
+                            Some(ThumbnailState::Loaded(texture)) => {
+                                ui.add(egui::Image::new(texture));
+                            }
+                            _ => {
+                                if let Some(ThumbnailState::Loaded(mid_tex)) = thumbnails.get(&play_path) {
+                                    ui.add(egui::Image::new(mid_tex).fit_to_exact_size(egui::vec2(800.0, 600.0)));
+                                } else {
+                                    ui.spinner();
+                                }
+                            }
+                        }
+                    });
+            }
+        }
+        if !preview_open {
+            *active_preview = None;
+        }
     }
 }
