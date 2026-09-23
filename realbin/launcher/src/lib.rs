@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::thread::JoinHandle;
 use std::{mem, thread};
 use time::Duration;
+use crate::burst::EmbeddedImageType;
 
 pub fn realmain() {
 	env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
@@ -208,7 +209,7 @@ impl MyApp {
                                     let path_clone = path.clone();
                                     let ctx = ui.ctx().clone();
                                     std::thread::spawn(move || {
-                                        let rgb_opt = BurstFile::extract_thumbnail(&path_clone);
+                                        let rgb_opt = BurstFile::extract_embedded_image(&path_clone, EmbeddedImageType::Thumbnail);
                                         let color_image = rgb_opt.map(|img| {
                                             let size = [img.width() as _, img.height() as _];
                                             let pixels = img.as_flat_samples();

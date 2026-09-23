@@ -32,13 +32,13 @@ impl BurstFile {
         }
     }
 
-    pub fn extract_thumbnail(path: &PathBuf) -> Option<RgbImage> {
+    pub fn extract_embedded_image(path: &PathBuf, imgtype: EmbeddedImageType) -> Option<RgbImage> {
         let mut file = File::open(path).ok()?;
         let mut buf = vec![0u8; 2usize.pow(16)];
         file.read_exact(buf.as_mut_slice()).ok()?;
 
         let mut exiftool = Command::new("exiftool")
-            .args(["-s3", "-ThumbnailOffset", "-ThumbnailLength", "-"])
+            .args(imgtype.to_args())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -56,5 +56,27 @@ impl BurstFile {
         file.seek(SeekFrom::Start(start as _)).ok()?;
         file.read_exact(&mut preview_buf).ok()?;
         Some(image::load_from_memory_with_format(&preview_buf, ImageFormat::Jpeg).ok()?.into_rgb8())
+    }
+}
+
+pub enum EmbeddedImageType {
+    Thumbnail,
+    Preview,
+    Full,
+}
+
+impl EmbeddedImageType {
+    fn to_args(&self) -> &'static[&'static str] {
+        match self {
+            EmbeddedImageType::Thumbnail => {
+                &["-s3", "-ThumbnailOffset", "-ThumbnailLength", "-"]
+            }
+            EmbeddedImageType::Preview => {
+                &["-s3", "-PreviewImageStart", "-PreviewImageLength", "-"]
+            }
+            EmbeddedImageType::Full => {
+                &["-s3", "-JpgFromRawStart", "-JpgFromRawLength", "-"]
+            }
+        }
     }
 }
