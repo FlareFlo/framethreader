@@ -40,18 +40,14 @@ pub enum ThumbnailState {
     Loaded(eframe::egui::TextureHandle),
 }
 
-pub struct ImageLoadRequest {
-    pub path: PathBuf,
-    pub is_preview: bool,
-    pub ctx: egui::Context,
-}
-
 struct MyApp {
     state: LauncherState,
     thumbnails: std::collections::HashMap<PathBuf, ThumbnailState>,
     previews: std::collections::HashMap<PathBuf, ThumbnailState>,
     image_rx: std::sync::mpsc::Receiver<(PathBuf, bool, Option<eframe::egui::ColorImage>)>,
-    request_tx: std::sync::mpsc::Sender<ImageLoadRequest>,
+    image_tx: std::sync::mpsc::Sender<(PathBuf, bool, Option<eframe::egui::ColorImage>)>,
+    thread_limit: usize,
+    thread_pool: Option<std::sync::Arc<rayon::ThreadPool>>,
     active_preview: Option<usize>,
 }
 
@@ -72,43 +68,14 @@ enum LauncherState {
 impl Default for MyApp {
     fn default() -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
-        let (req_tx, req_rx) = std::sync::mpsc::channel::<ImageLoadRequest>();
-        let req_rx = std::sync::Arc::new(std::sync::Mutex::new(req_rx));
-        
-        for _ in 0..4 {
-            let rx_clone = req_rx.clone();
-            let tx_clone = tx.clone();
-            std::thread::spawn(move || {
-                loop {
-                    let req = {
-                        let Ok(lock) = rx_clone.lock() else { break };
-                        match lock.recv() {
-                            Ok(req) => req,
-                            Err(_) => break,
-                        }
-                    };
-                    
-                    use crate::burst::EmbeddedImageType;
-                    let img_type = if req.is_preview { EmbeddedImageType::Preview } else { EmbeddedImageType::Thumbnail };
-                    let rgb_opt = BurstFile::extract_embedded_image(&req.path, img_type);
-                    let color_image = rgb_opt.map(|img| {
-                        let size = [img.width() as _, img.height() as _];
-                        let pixels = img.as_flat_samples();
-                        egui::ColorImage::from_rgb(size, pixels.as_slice())
-                    });
-                    
-                    let _ = tx_clone.send((req.path, req.is_preview, color_image));
-                    req.ctx.request_repaint();
-                }
-            });
-        }
-
         Self {
             state: LauncherState::Initial,
             thumbnails: Default::default(),
             previews: Default::default(),
             image_rx: rx,
-            request_tx: req_tx,
+            image_tx: tx,
+            thread_limit: thread::available_parallelism().unwrap().get(),
+            thread_pool: None,
             active_preview: None,
         }
     }
@@ -153,13 +120,23 @@ impl eframe::App for MyApp {
 
         // Only render UI here
         let new_state = match &mut self.state {
-            LauncherState::Initial => Self::initial_picker(ui, frame),
+            LauncherState::Initial => Self::initial_picker(ui, frame, &mut self.thread_limit, &mut self.thread_pool),
             LauncherState::Scanning { .. } => {
                 Self::scan_basedir(ui, frame);
                 None
             }
             LauncherState::CompletedScan { files, min_frames } => {
-                Self::show_scan_results(ui, frame, files, min_frames, &mut self.thumbnails, &mut self.previews, &self.request_tx, &mut self.active_preview);
+                Self::show_scan_results(
+                    ui, 
+                    frame, 
+                    files, 
+                    min_frames, 
+                    &mut self.thumbnails, 
+                    &mut self.previews, 
+                    &self.image_tx, 
+                    self.thread_pool.as_ref().unwrap(),
+                    &mut self.active_preview
+                );
                 None
             }
         };
@@ -171,14 +148,25 @@ impl eframe::App for MyApp {
 }
 
 impl MyApp {
-    pub fn initial_picker(ui: &mut egui::Ui, _frame: &mut eframe::Frame) -> Option<LauncherState> {
+    pub fn initial_picker(
+        ui: &mut egui::Ui, 
+        _frame: &mut eframe::Frame, 
+        thread_limit: &mut usize,
+        thread_pool: &mut Option<std::sync::Arc<rayon::ThreadPool>>
+    ) -> Option<LauncherState> {
         egui::CentralPanel::default()
             .show(ui, |ui| {
                 ui.heading("Framethreader");
+                
+                ui.add(egui::Slider::new(thread_limit, 1..=thread::available_parallelism().unwrap().get()).text("Global Thread Limit"));
 
                 if ui.button("Select folder").clicked() {
                     let picked = rfd::FileDialog::new().pick_folder();
                     if let Some(path) = picked {
+                        // Initialize custom rayon thread pool for this launch
+                        let pool = rayon::ThreadPoolBuilder::new().num_threads(*thread_limit).build().unwrap();
+                        *thread_pool = Some(std::sync::Arc::new(pool));
+
                         let bd = path.clone();
                         let handle = thread::spawn(|| {
                             let images = scan_images(bd);
@@ -225,7 +213,8 @@ impl MyApp {
         min_frames: &mut usize,
         thumbnails: &mut std::collections::HashMap<PathBuf, ThumbnailState>,
         previews: &mut std::collections::HashMap<PathBuf, ThumbnailState>,
-        request_tx: &std::sync::mpsc::Sender<ImageLoadRequest>,
+        image_tx: &std::sync::mpsc::Sender<(PathBuf, bool, Option<eframe::egui::ColorImage>)>,
+        thread_pool: &std::sync::Arc<rayon::ThreadPool>,
         active_preview: &mut Option<usize>,
     ) {
         egui::CentralPanel::default().show(ui, |ui| {
@@ -256,10 +245,20 @@ impl MyApp {
                                     if !thumbnails.contains_key(frame_path) {
                                         thumbnails.insert(frame_path.clone(), ThumbnailState::Loading);
                                         all_loaded = false;
-                                        let _ = request_tx.send(ImageLoadRequest {
-                                            path: frame_path.clone(),
-                                            is_preview: false,
-                                            ctx: ui.ctx().clone(),
+                                        
+                                        let tx = image_tx.clone();
+                                        let path_clone = frame_path.clone();
+                                        let ctx = ui.ctx().clone();
+                                        thread_pool.spawn(move || {
+                                            use crate::burst::EmbeddedImageType;
+                                            let rgb_opt = BurstFile::extract_embedded_image(&path_clone, EmbeddedImageType::Thumbnail);
+                                            let color_image = rgb_opt.map(|img| {
+                                                let size = [img.width() as _, img.height() as _];
+                                                let pixels = img.as_flat_samples();
+                                                egui::ColorImage::from_rgb(size, pixels.as_slice())
+                                            });
+                                            let _ = tx.send((path_clone, false, color_image));
+                                            ctx.request_repaint();
                                         });
                                     } else if let Some(ThumbnailState::Loading) = thumbnails.get(frame_path) {
                                         all_loaded = false;
@@ -313,10 +312,20 @@ impl MyApp {
                             if !previews.contains_key(frame_path) {
                                 previews.insert(frame_path.clone(), ThumbnailState::Loading);
                                 all_loaded = false;
-                                let _ = request_tx.send(ImageLoadRequest {
-                                    path: frame_path.clone(),
-                                    is_preview: true,
-                                    ctx: ui.ctx().clone(),
+                                
+                                let tx = image_tx.clone();
+                                let path_clone = frame_path.clone();
+                                let ctx = ui.ctx().clone();
+                                thread_pool.spawn(move || {
+                                    use crate::burst::EmbeddedImageType;
+                                    let rgb_opt = BurstFile::extract_embedded_image(&path_clone, EmbeddedImageType::Preview);
+                                    let color_image = rgb_opt.map(|img| {
+                                        let size = [img.width() as _, img.height() as _];
+                                        let pixels = img.as_flat_samples();
+                                        egui::ColorImage::from_rgb(size, pixels.as_slice())
+                                    });
+                                    let _ = tx.send((path_clone, true, color_image));
+                                    ctx.request_repaint();
                                 });
                             } else if let Some(ThumbnailState::Loading) = previews.get(frame_path) {
                                 all_loaded = false;
