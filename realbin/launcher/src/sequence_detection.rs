@@ -9,14 +9,13 @@ use std::ops::Add;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use time::macros::format_description;
 use time::{Duration, PlainDateTime};
 
 static ACCEPTED_IMAGE_EXTENSIONS: &[&str] = &["ARW", "HEIC", "JPG", "HEIF"];
 
 #[derive(serde::Deserialize, Debug)]
 struct ExifRaw {
-	#[serde(rename = "CreateDate")]
+    #[serde(rename = "CreateDate")]
     create_date: String,
     #[serde(
         rename = "SubSecTimeOriginal",

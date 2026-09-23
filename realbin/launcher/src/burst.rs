@@ -1,12 +1,11 @@
-use std::fs;
+use getset::Getters;
+use image::{ImageFormat, RgbImage};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use image::{DynamicImage, ImageFormat, RgbImage};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::str::FromStr;
 use time::PlainDateTime;
-use getset::Getters;
 use time::format_description::StaticFormatDescription;
 use time::macros::format_description;
 
@@ -20,10 +19,10 @@ pub struct BurstFile {
 
 impl BurstFile {
     pub fn new(path: impl Into<PathBuf>, create_date: &str, subsec: u16) -> Self {
-        static DATEFMT: StaticFormatDescription = format_description!("[year]:[month]:[day] [hour]:[minute]:[second]");
+        static DATEFMT: StaticFormatDescription =
+            format_description!("[year]:[month]:[day] [hour]:[minute]:[second]");
 
-
-        Self  {
+        Self {
             path: path.into(),
             created: PlainDateTime::parse(&create_date, &DATEFMT)
                 .unwrap()
@@ -55,10 +54,15 @@ impl BurstFile {
         let mut preview_buf = vec![0_u8; len];
         file.seek(SeekFrom::Start(start as _)).ok()?;
         file.read_exact(&mut preview_buf).ok()?;
-        Some(image::load_from_memory_with_format(&preview_buf, ImageFormat::Jpeg).ok()?.into_rgb8())
+        Some(
+            image::load_from_memory_with_format(&preview_buf, ImageFormat::Jpeg)
+                .ok()?
+                .into_rgb8(),
+        )
     }
 }
 
+#[derive(Debug, Hash, Copy, Clone, PartialEq, Eq)]
 pub enum EmbeddedImageType {
     Thumbnail,
     Preview,
@@ -66,17 +70,13 @@ pub enum EmbeddedImageType {
 }
 
 impl EmbeddedImageType {
-    fn to_args(&self) -> &'static[&'static str] {
+    fn to_args(&self) -> &'static [&'static str] {
         match self {
-            EmbeddedImageType::Thumbnail => {
-                &["-s3", "-ThumbnailOffset", "-ThumbnailLength", "-"]
-            }
+            EmbeddedImageType::Thumbnail => &["-s3", "-ThumbnailOffset", "-ThumbnailLength", "-"],
             EmbeddedImageType::Preview => {
                 &["-s3", "-PreviewImageStart", "-PreviewImageLength", "-"]
             }
-            EmbeddedImageType::Full => {
-                &["-s3", "-JpgFromRawStart", "-JpgFromRawLength", "-"]
-            }
+            EmbeddedImageType::Full => &["-s3", "-JpgFromRawStart", "-JpgFromRawLength", "-"],
         }
     }
 }

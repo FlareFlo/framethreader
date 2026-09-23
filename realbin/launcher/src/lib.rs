@@ -1,23 +1,23 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
-mod sequence_detection;
 mod burst;
+mod sequence_detection;
 
 pub const RUNMODE: &str = "launcher";
 
+use crate::burst::EmbeddedImageType;
 use crate::sequence_detection::{detect_by_time, scan_images};
 use burst::BurstFile;
 use eframe::egui;
-use egui::{ProgressBar, Slider};
+use egui::ProgressBar;
 use std::ops::Not;
 use std::path::PathBuf;
 use std::thread::JoinHandle;
 use std::{mem, thread};
 use time::Duration;
-use crate::burst::EmbeddedImageType;
 
 pub fn realmain() {
-	env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
+    env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1024.0, 768.0]),
         ..Default::default()
@@ -42,10 +42,17 @@ pub enum ThumbnailState {
 
 struct MyApp {
     state: LauncherState,
-    thumbnails: std::collections::HashMap<PathBuf, ThumbnailState>,
-    previews: std::collections::HashMap<PathBuf, ThumbnailState>,
-    image_rx: std::sync::mpsc::Receiver<(PathBuf, bool, Option<eframe::egui::ColorImage>)>,
-    image_tx: std::sync::mpsc::Sender<(PathBuf, bool, Option<eframe::egui::ColorImage>)>,
+    images: std::collections::HashMap<(PathBuf, crate::burst::EmbeddedImageType), ThumbnailState>,
+    image_rx: std::sync::mpsc::Receiver<(
+        PathBuf,
+        crate::burst::EmbeddedImageType,
+        Option<eframe::egui::ColorImage>,
+    )>,
+    image_tx: std::sync::mpsc::Sender<(
+        PathBuf,
+        crate::burst::EmbeddedImageType,
+        Option<eframe::egui::ColorImage>,
+    )>,
     thread_limit: usize,
     thread_pool: Option<std::sync::Arc<rayon::ThreadPool>>,
     active_preview: Option<usize>,
@@ -70,8 +77,7 @@ impl Default for MyApp {
         let (tx, rx) = std::sync::mpsc::channel();
         Self {
             state: LauncherState::Initial,
-            thumbnails: Default::default(),
-            previews: Default::default(),
+            images: Default::default(),
             image_rx: rx,
             image_tx: tx,
             thread_limit: thread::available_parallelism().unwrap().get(),
@@ -84,24 +90,20 @@ impl Default for MyApp {
 impl eframe::App for MyApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         // Poll for thumbnails and previews
-        while let Ok((path, is_preview, color_image_opt)) = self.image_rx.try_recv() {
+        while let Ok((path, img_type, color_image_opt)) = self.image_rx.try_recv() {
+            let key = (path, img_type);
             if let Some(color_image) = color_image_opt {
-                let texture = ui.ctx().load_texture(
-                    if is_preview { "preview" } else { "thumbnail" }, 
-                    color_image, 
-                    egui::TextureOptions::LINEAR
-                );
-                if is_preview {
-                    self.previews.insert(path, ThumbnailState::Loaded(texture));
-                } else {
-                    self.thumbnails.insert(path, ThumbnailState::Loaded(texture));
-                }
+                let name = match img_type {
+                    crate::burst::EmbeddedImageType::Preview => "preview",
+                    crate::burst::EmbeddedImageType::Thumbnail => "thumbnail",
+                    crate::burst::EmbeddedImageType::Full => "full",
+                };
+                let texture =
+                    ui.ctx()
+                        .load_texture(name, color_image, egui::TextureOptions::LINEAR);
+                self.images.insert(key, ThumbnailState::Loaded(texture));
             } else {
-                if is_preview {
-                    self.previews.remove(&path);
-                } else {
-                    self.thumbnails.remove(&path);
-                }
+                self.images.remove(&key);
             }
         }
 
@@ -120,22 +122,23 @@ impl eframe::App for MyApp {
 
         // Only render UI here
         let new_state = match &mut self.state {
-            LauncherState::Initial => Self::initial_picker(ui, frame, &mut self.thread_limit, &mut self.thread_pool),
+            LauncherState::Initial => {
+                Self::initial_picker(ui, frame, &mut self.thread_limit, &mut self.thread_pool)
+            }
             LauncherState::Scanning { .. } => {
                 Self::scan_basedir(ui, frame);
                 None
             }
             LauncherState::CompletedScan { files, min_frames } => {
                 Self::show_scan_results(
-                    ui, 
-                    frame, 
-                    files, 
-                    min_frames, 
-                    &mut self.thumbnails, 
-                    &mut self.previews, 
-                    &self.image_tx, 
+                    ui,
+                    frame,
+                    files,
+                    min_frames,
+                    &mut self.images,
+                    &self.image_tx,
                     self.thread_pool.as_ref().unwrap(),
-                    &mut self.active_preview
+                    &mut self.active_preview,
                 );
                 None
             }
@@ -149,22 +152,31 @@ impl eframe::App for MyApp {
 
 impl MyApp {
     pub fn initial_picker(
-        ui: &mut egui::Ui, 
-        _frame: &mut eframe::Frame, 
+        ui: &mut egui::Ui,
+        _frame: &mut eframe::Frame,
         thread_limit: &mut usize,
-        thread_pool: &mut Option<std::sync::Arc<rayon::ThreadPool>>
+        thread_pool: &mut Option<std::sync::Arc<rayon::ThreadPool>>,
     ) -> Option<LauncherState> {
         egui::CentralPanel::default()
             .show(ui, |ui| {
                 ui.heading("Framethreader");
-                
-                ui.add(egui::Slider::new(thread_limit, 1..=thread::available_parallelism().unwrap().get()).text("Global Thread Limit"));
+
+                ui.add(
+                    egui::Slider::new(
+                        thread_limit,
+                        1..=thread::available_parallelism().unwrap().get(),
+                    )
+                    .text("Global Thread Limit"),
+                );
 
                 if ui.button("Select folder").clicked() {
                     let picked = rfd::FileDialog::new().pick_folder();
                     if let Some(path) = picked {
                         // Initialize custom rayon thread pool for this launch
-                        let pool = rayon::ThreadPoolBuilder::new().num_threads(*thread_limit).build().unwrap();
+                        let pool = rayon::ThreadPoolBuilder::new()
+                            .num_threads(*thread_limit)
+                            .build()
+                            .unwrap();
                         *thread_pool = Some(std::sync::Arc::new(pool));
 
                         let bd = path.clone();
@@ -211,15 +223,18 @@ impl MyApp {
         _frame: &mut eframe::Frame,
         files: &mut [Vec<BurstFile>],
         min_frames: &mut usize,
-        thumbnails: &mut std::collections::HashMap<PathBuf, ThumbnailState>,
-        previews: &mut std::collections::HashMap<PathBuf, ThumbnailState>,
-        image_tx: &std::sync::mpsc::Sender<(PathBuf, bool, Option<eframe::egui::ColorImage>)>,
+        images: &mut std::collections::HashMap<(PathBuf, EmbeddedImageType), ThumbnailState>,
+        image_tx: &std::sync::mpsc::Sender<(
+            PathBuf,
+            EmbeddedImageType,
+            Option<eframe::egui::ColorImage>,
+        )>,
         thread_pool: &std::sync::Arc<rayon::ThreadPool>,
         active_preview: &mut Option<usize>,
     ) {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.heading("Scan Results");
-            ui.add(Slider::new(min_frames, 1..=100).text("Min Frames"));
+            ui.add(egui::Slider::new(min_frames, 1..=100).text("Min Frames"));
             egui_extras::TableBuilder::new(ui)
                 .striped(true)
                 .column(egui_extras::Column::initial(160.0).at_least(160.0))
@@ -227,10 +242,18 @@ impl MyApp {
                 .column(egui_extras::Column::initial(100.0).at_least(80.0))
                 .column(egui_extras::Column::remainder())
                 .header(20.0, |mut header| {
-                    header.col(|ui| { ui.heading("Thumbnail"); });
-                    header.col(|ui| { ui.heading("Length"); });
-                    header.col(|ui| { ui.heading("Duration"); });
-                    header.col(|ui| { ui.heading("Actions"); });
+                    header.col(|ui| {
+                        ui.heading("Thumbnail");
+                    });
+                    header.col(|ui| {
+                        ui.heading("Length");
+                    });
+                    header.col(|ui| {
+                        ui.heading("Duration");
+                    });
+                    header.col(|ui| {
+                        ui.heading("Actions");
+                    });
                 })
                 .body(|mut body| {
                     for (i, group) in files.iter_mut().enumerate() {
@@ -242,25 +265,33 @@ impl MyApp {
                                 let mut all_loaded = true;
                                 for frame in group.iter() {
                                     let frame_path = frame.path();
-                                    if !thumbnails.contains_key(frame_path) {
-                                        thumbnails.insert(frame_path.clone(), ThumbnailState::Loading);
+                                    let key = (frame_path.clone(), EmbeddedImageType::Thumbnail);
+                                    if !images.contains_key(&key) {
+                                        images.insert(key.clone(), ThumbnailState::Loading);
                                         all_loaded = false;
-                                        
+
                                         let tx = image_tx.clone();
                                         let path_clone = frame_path.clone();
                                         let ctx = ui.ctx().clone();
                                         thread_pool.spawn(move || {
                                             use crate::burst::EmbeddedImageType;
-                                            let rgb_opt = BurstFile::extract_embedded_image(&path_clone, EmbeddedImageType::Thumbnail);
+                                            let rgb_opt = BurstFile::extract_embedded_image(
+                                                &path_clone,
+                                                EmbeddedImageType::Thumbnail,
+                                            );
                                             let color_image = rgb_opt.map(|img| {
                                                 let size = [img.width() as _, img.height() as _];
                                                 let pixels = img.as_flat_samples();
                                                 egui::ColorImage::from_rgb(size, pixels.as_slice())
                                             });
-                                            let _ = tx.send((path_clone, false, color_image));
+                                            let _ = tx.send((
+                                                path_clone,
+                                                EmbeddedImageType::Thumbnail,
+                                                color_image,
+                                            ));
                                             ctx.request_repaint();
                                         });
-                                    } else if let Some(ThumbnailState::Loading) = thumbnails.get(frame_path) {
+                                    } else if let Some(ThumbnailState::Loading) = images.get(&key) {
                                         all_loaded = false;
                                     }
                                 }
@@ -269,11 +300,22 @@ impl MyApp {
                                     let time = ui.input(|i| i.time);
                                     let play_idx = (time * 10.0) as usize % group.len();
                                     let path = group[play_idx].path().clone();
-                                    if let Some(ThumbnailState::Loaded(texture)) = thumbnails.get(&path) {
-                                        ui.add(egui::Image::new(texture).fit_to_exact_size(egui::vec2(160.0, 120.0)));
+                                    if let Some(ThumbnailState::Loaded(texture)) =
+                                        images.get(&(path, EmbeddedImageType::Thumbnail))
+                                    {
+                                        ui.add(
+                                            egui::Image::new(texture)
+                                                .fit_to_exact_size(egui::vec2(160.0, 120.0)),
+                                        );
                                     }
                                 } else {
-                                    render_fallback_spinner(ui, group, thumbnails, None, egui::vec2(160.0, 120.0), egui::vec2(20.0, 20.0));
+                                    render_fallback_spinner(
+                                        ui,
+                                        group,
+                                        images,
+                                        egui::vec2(160.0, 120.0),
+                                        egui::vec2(20.0, 20.0),
+                                    );
                                 }
                             });
                             row.col(|ui| {
@@ -309,25 +351,33 @@ impl MyApp {
                         let mut all_loaded = true;
                         for frame in group.iter() {
                             let frame_path = frame.path();
-                            if !previews.contains_key(frame_path) {
-                                previews.insert(frame_path.clone(), ThumbnailState::Loading);
+                            let key = (frame_path.clone(), EmbeddedImageType::Preview);
+                            if !images.contains_key(&key) {
+                                images.insert(key.clone(), ThumbnailState::Loading);
                                 all_loaded = false;
-                                
+
                                 let tx = image_tx.clone();
                                 let path_clone = frame_path.clone();
                                 let ctx = ui.ctx().clone();
                                 thread_pool.spawn(move || {
                                     use crate::burst::EmbeddedImageType;
-                                    let rgb_opt = BurstFile::extract_embedded_image(&path_clone, EmbeddedImageType::Preview);
+                                    let rgb_opt = BurstFile::extract_embedded_image(
+                                        &path_clone,
+                                        EmbeddedImageType::Preview,
+                                    );
                                     let color_image = rgb_opt.map(|img| {
                                         let size = [img.width() as _, img.height() as _];
                                         let pixels = img.as_flat_samples();
                                         egui::ColorImage::from_rgb(size, pixels.as_slice())
                                     });
-                                    let _ = tx.send((path_clone, true, color_image));
+                                    let _ = tx.send((
+                                        path_clone,
+                                        EmbeddedImageType::Preview,
+                                        color_image,
+                                    ));
                                     ctx.request_repaint();
                                 });
-                            } else if let Some(ThumbnailState::Loading) = previews.get(frame_path) {
+                            } else if let Some(ThumbnailState::Loading) = images.get(&key) {
                                 all_loaded = false;
                             }
                         }
@@ -336,14 +386,30 @@ impl MyApp {
                             let time = ui.input(|i| i.time);
                             let play_idx = (time * 10.0) as usize % group.len();
                             let play_path = group[play_idx].path().clone();
-                            ui.heading(format!("Playing {} frames... ({} / {})", group.len(), play_idx + 1, group.len()));
-                            
-                            if let Some(ThumbnailState::Loaded(texture)) = previews.get(&play_path) {
-                                ui.add(egui::Image::new(texture).fit_to_exact_size(egui::vec2(800.0, 600.0)));
+                            ui.heading(format!(
+                                "Playing {} frames... ({} / {})",
+                                group.len(),
+                                play_idx + 1,
+                                group.len()
+                            ));
+
+                            if let Some(ThumbnailState::Loaded(texture)) =
+                                images.get(&(play_path, EmbeddedImageType::Preview))
+                            {
+                                ui.add(
+                                    egui::Image::new(texture)
+                                        .fit_to_exact_size(egui::vec2(800.0, 600.0)),
+                                );
                             }
                         } else {
                             ui.heading(format!("Loading {} frames...", group.len()));
-                            render_fallback_spinner(ui, group, thumbnails, Some(previews), egui::vec2(800.0, 600.0), egui::vec2(30.0, 30.0));
+                            render_fallback_spinner(
+                                ui,
+                                group,
+                                images,
+                                egui::vec2(800.0, 600.0),
+                                egui::vec2(30.0, 30.0),
+                            );
                         }
                     });
             }
@@ -357,33 +423,38 @@ impl MyApp {
 fn render_fallback_spinner(
     ui: &mut egui::Ui,
     group: &[BurstFile],
-    thumbnails: &std::collections::HashMap<PathBuf, ThumbnailState>,
-    previews: Option<&std::collections::HashMap<PathBuf, ThumbnailState>>,
+    images: &std::collections::HashMap<(PathBuf, EmbeddedImageType), ThumbnailState>,
     size: egui::Vec2,
     spinner_size: egui::Vec2,
 ) {
     let mut fallback = None;
     let mid_path = group[group.len() / 2].path();
-    
-    if let Some(prevs) = previews {
-        if let Some(ThumbnailState::Loaded(tex)) = prevs.get(mid_path) {
-            fallback = Some(tex);
-        } else {
-            for frame in group.iter() {
-                if let Some(ThumbnailState::Loaded(tex)) = prevs.get(frame.path()) {
-                    fallback = Some(tex);
-                    break;
-                }
+
+    if let Some(ThumbnailState::Loaded(tex)) =
+        images.get(&(mid_path.clone(), EmbeddedImageType::Preview))
+    {
+        fallback = Some(tex);
+    } else {
+        for frame in group.iter() {
+            if let Some(ThumbnailState::Loaded(tex)) =
+                images.get(&(frame.path().clone(), EmbeddedImageType::Preview))
+            {
+                fallback = Some(tex);
+                break;
             }
         }
     }
-    
+
     if fallback.is_none() {
-        if let Some(ThumbnailState::Loaded(tex)) = thumbnails.get(mid_path) {
+        if let Some(ThumbnailState::Loaded(tex)) =
+            images.get(&(mid_path.clone(), EmbeddedImageType::Thumbnail))
+        {
             fallback = Some(tex);
         } else {
             for frame in group.iter() {
-                if let Some(ThumbnailState::Loaded(tex)) = thumbnails.get(frame.path()) {
+                if let Some(ThumbnailState::Loaded(tex)) =
+                    images.get(&(frame.path().clone(), EmbeddedImageType::Thumbnail))
+                {
                     fallback = Some(tex);
                     break;
                 }
@@ -392,7 +463,11 @@ fn render_fallback_spinner(
     }
 
     if let Some(tex) = fallback {
-        let response = ui.add(egui::Image::new(tex).fit_to_exact_size(size).tint(egui::Color32::from_gray(100)));
+        let response = ui.add(
+            egui::Image::new(tex)
+                .fit_to_exact_size(size)
+                .tint(egui::Color32::from_gray(100)),
+        );
         let center = response.rect.center();
         let spinner_rect = egui::Rect::from_center_size(center, spinner_size);
         ui.put(spinner_rect, egui::Spinner::new());
