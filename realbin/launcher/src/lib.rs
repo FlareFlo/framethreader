@@ -34,13 +34,19 @@ pub fn realmain() {
     .unwrap();
 }
 
+pub enum ThumbnailState {
+    Loading,
+    Loaded(eframe::egui::TextureHandle),
+}
+
 struct MyApp {
     state: LauncherState,
-    thumbnails: std::collections::HashMap<PathBuf, eframe::egui::TextureHandle>,
+    thumbnails: std::collections::HashMap<PathBuf, ThumbnailState>,
+    thumbnail_tx: std::sync::mpsc::Sender<(PathBuf, Option<eframe::egui::ColorImage>)>,
+    thumbnail_rx: std::sync::mpsc::Receiver<(PathBuf, Option<eframe::egui::ColorImage>)>,
 }
 
 #[derive(Default)]
-
 enum LauncherState {
     #[default]
     Initial,
@@ -56,15 +62,28 @@ enum LauncherState {
 
 impl Default for MyApp {
     fn default() -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
         Self {
             state: LauncherState::Initial,
             thumbnails: Default::default(),
+            thumbnail_tx: tx,
+            thumbnail_rx: rx,
         }
     }
 }
 
 impl eframe::App for MyApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        // Poll for thumbnails
+        while let Ok((path, color_image_opt)) = self.thumbnail_rx.try_recv() {
+            if let Some(color_image) = color_image_opt {
+                let texture = ui.ctx().load_texture("thumbnail", color_image, egui::TextureOptions::LINEAR);
+                self.thumbnails.insert(path, ThumbnailState::Loaded(texture));
+            } else {
+                self.thumbnails.remove(&path);
+            }
+        }
+
         // Scanning -> CompletedScanning
         if let LauncherState::Scanning { handle, .. } = &self.state {
             if handle.is_finished() {
@@ -72,7 +91,7 @@ impl eframe::App for MyApp {
                     let res = handle.join().unwrap();
                     self.state = LauncherState::CompletedScan {
                         files: res,
-                        min_frames: 3,
+                        min_frames: 10,
                     };
                 }
             }
@@ -86,7 +105,7 @@ impl eframe::App for MyApp {
                 None
             }
             LauncherState::CompletedScan { files, min_frames } => {
-                Self::show_scan_results(ui, frame, files, min_frames, &mut self.thumbnails);
+                Self::show_scan_results(ui, frame, files, min_frames, &mut self.thumbnails, &self.thumbnail_tx);
                 None
             }
         };
@@ -150,7 +169,8 @@ impl MyApp {
         _frame: &mut eframe::Frame,
         files: &mut [Vec<BurstFile>],
         min_frames: &mut usize,
-        thumbnails: &mut std::collections::HashMap<PathBuf, eframe::egui::TextureHandle>,
+        thumbnails: &mut std::collections::HashMap<PathBuf, ThumbnailState>,
+        thumbnail_tx: &std::sync::mpsc::Sender<(PathBuf, Option<eframe::egui::ColorImage>)>,
     ) {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.heading("Scan Results");
@@ -182,18 +202,32 @@ impl MyApp {
                                 let mid_frame = &mut group[mid_idx];
                                 let path = mid_frame.path().clone();
                                 
-                                let texture = thumbnails.entry(path).or_insert_with(|| {
-                                    if mid_frame.thumbnail().is_none() {
-                                        mid_frame.gen_thumbnail();
-                                    }
-                                    let img = mid_frame.thumbnail().as_ref().unwrap();
-                                    let size = [img.width() as _, img.height() as _];
-                                    let pixels = img.as_flat_samples();
-                                    let color_image = egui::ColorImage::from_rgb(size, pixels.as_slice());
-                                    ui.ctx().load_texture("thumbnail", color_image, egui::TextureOptions::LINEAR)
-                                });
+                                if !thumbnails.contains_key(&path) {
+                                    thumbnails.insert(path.clone(), ThumbnailState::Loading);
+                                    let tx = thumbnail_tx.clone();
+                                    let path_clone = path.clone();
+                                    let ctx = ui.ctx().clone();
+                                    std::thread::spawn(move || {
+                                        let rgb_opt = BurstFile::extract_thumbnail(&path_clone);
+                                        let color_image = rgb_opt.map(|img| {
+                                            let size = [img.width() as _, img.height() as _];
+                                            let pixels = img.as_flat_samples();
+                                            egui::ColorImage::from_rgb(size, pixels.as_slice())
+                                        });
+                                        let _ = tx.send((path_clone, color_image));
+                                        ctx.request_repaint();
+                                    });
+                                }
                                 
-                                ui.add(egui::Image::new(&*texture).fit_to_exact_size(egui::vec2(80.0, 80.0)));
+                                match thumbnails.get(&path) {
+                                    Some(ThumbnailState::Loaded(texture)) => {
+                                        ui.add(egui::Image::new(texture).fit_to_exact_size(egui::vec2(80.0, 80.0)));
+                                    }
+                                    Some(ThumbnailState::Loading) => {
+                                        ui.spinner();
+                                    }
+                                    None => {}
+                                }
                             });
                             row.col(|ui| {
                                 ui.label(format!("{} frames", group.len()));

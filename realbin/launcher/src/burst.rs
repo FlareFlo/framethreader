@@ -35,27 +35,33 @@ impl BurstFile {
         }
     }
 
-    pub fn gen_thumbnail(&mut self) {
-        let mut file = File::open(&self.path).unwrap();
+    pub fn extract_thumbnail(path: &PathBuf) -> Option<RgbImage> {
+        let mut file = File::open(path).ok()?;
         let mut buf = vec![0u8; 2usize.pow(16)];
-        file.read_exact(buf.as_mut_slice()).unwrap();
+        file.read_exact(buf.as_mut_slice()).ok()?;
 
-        // Get offsets
         let mut exiftool = Command::new("exiftool")
             .args(["-s3", "-ThumbnailOffset", "-ThumbnailLength", "-"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
-            .unwrap();
-        let stdin = exiftool.stdin.as_mut().unwrap();
-        stdin.write_all(&buf).unwrap();
+            .ok()?;
+        let stdin = exiftool.stdin.as_mut()?;
+        stdin.write_all(&buf).ok()?;
 
-        let header_res = exiftool.wait_with_output().unwrap();
-        let offsets = String::from_utf8(header_res.stdout).unwrap();
-        let (start, len) = offsets.split_once("\n").map(|(l,r)|(usize::from_str(l).unwrap(), usize::from_str(r.trim()).unwrap())).unwrap();
+        let header_res = exiftool.wait_with_output().ok()?;
+        let offsets = String::from_utf8(header_res.stdout).ok()?;
+        let (start, len) = offsets.split_once("\n")?;
+        let start = usize::from_str(start.trim()).ok()?;
+        let len = usize::from_str(len.trim()).ok()?;
+
         let mut preview_buf = vec![0_u8; len];
-        file.seek(SeekFrom::Start(start as _)).unwrap();
-        file.read_exact(&mut preview_buf).unwrap();
-        self.thumbnail = Some(image::load_from_memory_with_format(&preview_buf, ImageFormat::Jpeg).unwrap().into_rgb8())
+        file.seek(SeekFrom::Start(start as _)).ok()?;
+        file.read_exact(&mut preview_buf).ok()?;
+        Some(image::load_from_memory_with_format(&preview_buf, ImageFormat::Jpeg).ok()?.into_rgb8())
+    }
+
+    pub fn gen_thumbnail(&mut self) {
+        self.thumbnail = Self::extract_thumbnail(&self.path);
     }
 }
