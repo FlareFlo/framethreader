@@ -1,6 +1,6 @@
-use std::sync::{Arc, RwLock};
-use std::path::PathBuf;
 use rayon::prelude::*;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use winit::window::Window;
 
 pub struct WgpuState {
@@ -12,7 +12,7 @@ pub struct WgpuState {
     diffuse_bind_group: wgpu::BindGroup,
     texture: wgpu::Texture,
     uniform_buffer: wgpu::Buffer,
-    
+
     frame_cache: Arc<RwLock<Vec<Option<Vec<u8>>>>>,
     total_frames: usize,
     current_frame: usize,
@@ -24,13 +24,16 @@ impl WgpuState {
     pub async fn new(window: Arc<Window>, folder_path: &str) -> Self {
         let size = window.inner_size();
         let instance = wgpu::Instance::default();
-        
+
         let surface = instance.create_surface(window.clone()).unwrap();
-        
-        let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
-            compatible_surface: Some(&surface),
-            ..Default::default()
-        }).await.unwrap();
+
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                compatible_surface: Some(&surface),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
 
         let device_descriptor = wgpu::DeviceDescriptor {
             label: None,
@@ -43,7 +46,9 @@ impl WgpuState {
         let device_request = adapter.request_device(&device_descriptor).await;
         let (device, queue) = device_request.unwrap();
 
-        let mut config = surface.get_default_config(&adapter, size.width, size.height).unwrap();
+        let mut config = surface
+            .get_default_config(&adapter, size.width, size.height)
+            .unwrap();
         config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
         surface.configure(&device, &config);
 
@@ -51,10 +56,14 @@ impl WgpuState {
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.path())
-            .filter(|p| p.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg")))
+            .filter(|p| {
+                p.extension().map_or(false, |ext| {
+                    ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg")
+                })
+            })
             .collect();
         paths.sort();
-        
+
         let total_frames = paths.len();
         if total_frames == 0 {
             panic!("No jpeg files found in directory!");
@@ -81,19 +90,23 @@ impl WgpuState {
 
         let mut initial_cache = vec![None; total_frames];
         initial_cache[0] = Some(first_img.into_raw());
-        
+
         let frame_cache = Arc::new(RwLock::new(initial_cache));
-        
+
         let cache_clone = Arc::clone(&frame_cache);
         let paths_clone = paths.clone();
         std::thread::spawn(move || {
-            paths_clone.into_par_iter().enumerate().skip(1).for_each(|(i, path)| {
-                if let Ok(img) = image::open(&path) {
-                    let rgba = img.to_rgba8().into_raw();
-                    let mut cache = cache_clone.write().unwrap();
-                    cache[i] = Some(rgba);
-                }
-            });
+            paths_clone
+                .into_par_iter()
+                .enumerate()
+                .skip(1)
+                .for_each(|(i, path)| {
+                    if let Ok(img) = image::open(&path) {
+                        let rgba = img.to_rgba8().into_raw();
+                        let mut cache = cache_clone.write().unwrap();
+                        cache[i] = Some(rgba);
+                    }
+                });
         });
 
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -170,11 +183,12 @@ impl WgpuState {
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
-        let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            ..Default::default()
-        });
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Render Pipeline Layout"),
+                bind_group_layouts: &[Some(&bind_group_layout)],
+                ..Default::default()
+            });
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
@@ -245,24 +259,33 @@ impl WgpuState {
             } else {
                 [1.0f32, window_aspect / image_aspect]
             };
-            self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&scale));
+            self.queue
+                .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&scale));
         }
     }
 
     pub fn render(&mut self) -> Result<(), ()> {
         let output = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(output) | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
+            wgpu::CurrentSurfaceTexture::Success(output)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.resize(winit::dpi::PhysicalSize::new(self.config.width, self.config.height));
+                self.resize(winit::dpi::PhysicalSize::new(
+                    self.config.width,
+                    self.config.height,
+                ));
                 return Err(());
             }
             _ => return Err(()),
         };
 
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

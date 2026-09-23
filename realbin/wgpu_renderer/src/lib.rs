@@ -1,18 +1,18 @@
 mod gpu;
 
-use winit::keyboard::KeyCode;
-use winit::keyboard::PhysicalKey;
-use winit::event::ElementState;
-use winit::event::KeyEvent;
-use winit::event_loop::ActiveEventLoop;
-use winit::application::ApplicationHandler;
-use winit::window::{Window, WindowId};
-use winit::event_loop::ControlFlow;
-use winit::event_loop::EventLoop;
+use gpu::WgpuState;
 use std::sync::Arc;
 use std::time::Instant;
+use winit::application::ApplicationHandler;
+use winit::event::ElementState;
+use winit::event::KeyEvent;
 use winit::event::WindowEvent;
-use gpu::WgpuState;
+use winit::event_loop::ActiveEventLoop;
+use winit::event_loop::ControlFlow;
+use winit::event_loop::EventLoop;
+use winit::keyboard::KeyCode;
+use winit::keyboard::PhysicalKey;
+use winit::window::{Window, WindowId};
 
 pub const RUNMODE: &str = "wgpu";
 
@@ -30,7 +30,6 @@ pub fn realmain() {
     event_loop.run_app(&mut app).unwrap();
 }
 
-
 struct App {
     window: Option<Arc<Window>>,
     state: Option<WgpuState>,
@@ -43,13 +42,20 @@ impl ApplicationHandler for App {
             let attributes = Window::default_attributes().with_title("WGPU Video Player");
             let window = Arc::new(event_loop.create_window(attributes).unwrap());
             let folder_path = "/home/flareflo/Downloads/catch";
-            self.state = Some(pollster::block_on(WgpuState::new(window.clone(), folder_path)));
+            self.state = Some(pollster::block_on(WgpuState::new(
+                window.clone(),
+                folder_path,
+            )));
             self.window = Some(window);
         }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let state = if let Some(state) = &mut self.state { state } else { return };
+        let state = if let Some(state) = &mut self.state {
+            state
+        } else {
+            return;
+        };
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
@@ -57,11 +63,12 @@ impl ApplicationHandler for App {
                 state.resize(physical_size);
             }
             WindowEvent::KeyboardInput {
-                event: KeyEvent {
-                    state: ElementState::Pressed,
-                    physical_key: PhysicalKey::Code(KeyCode::Space),
-                    ..
-                },
+                event:
+                    KeyEvent {
+                        state: ElementState::Pressed,
+                        physical_key: PhysicalKey::Code(KeyCode::Space),
+                        ..
+                    },
                 ..
             } => {
                 state.is_playing = !state.is_playing;
