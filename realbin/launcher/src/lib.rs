@@ -289,26 +289,60 @@ impl MyApp {
 
     pub fn scan_basedir(ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
-            ui.heading("Framethreader");
-            let progress = sequence_detection::get_progress();
-            let msg = format!(
-                "{} {}",
-                progress.current_task,
-                progress
-                    .current_file
-                    .rsplit_once("/")
-                    .map(|e| e.1)
-                    .unwrap_or(&progress.current_file)
-            );
-            ui.add(
-                ProgressBar::new(progress.progress_ratio())
-                    .show_percentage()
-                    .text(msg)
-                    .desired_width(300.0),
-            );
-            if progress.complete().not() {
-                ui.request_repaint();
-            }
+            ui.vertical_centered(|ui| {
+                ui.add_space(80.0);
+                
+                ui.label(egui::RichText::new("Framethreader").strong().size(40.0));
+                ui.add_space(10.0);
+                ui.label(egui::RichText::new("Scanning Directory").weak().size(20.0));
+                
+                ui.add_space(60.0);
+
+                let progress = sequence_detection::get_progress();
+                
+                ui.allocate_ui_with_layout(
+                    egui::vec2(450.0, ui.available_height()),
+                    egui::Layout::top_down(egui::Align::Center),
+                    |ui| {
+                        egui::Frame::group(ui.style())
+                            .fill(ui.visuals().window_fill())
+                            .inner_margin(20.0)
+                            .show(ui, |ui| {
+                                ui.set_min_width(400.0);
+                                
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.add_space(10.0);
+                                    ui.label(egui::RichText::new(&progress.current_task).strong().size(16.0));
+                                });
+                                
+                                ui.add_space(15.0);
+                                
+                                // Progress bar
+                                let ratio = if progress.total > 0 { progress.progress_ratio() } else { 0.0 };
+                                let progress_bar = egui::ProgressBar::new(ratio)
+                                    .show_percentage()
+                                    .animate(true);
+                                    
+                                ui.add_sized([400.0, 24.0], progress_bar);
+                                
+                                ui.add_space(10.0);
+                                
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format!("{}/{} Files", progress.completed, progress.total)).size(14.0));
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        let filename = progress.current_file.rsplit_once("/").map(|e| e.1).unwrap_or(&progress.current_file);
+                                        ui.label(egui::RichText::new(filename).weak().size(12.0));
+                                    });
+                                });
+                            });
+                    }
+                );
+
+                if progress.complete().not() {
+                    ui.ctx().request_repaint();
+                }
+            });
         });
     }
 
