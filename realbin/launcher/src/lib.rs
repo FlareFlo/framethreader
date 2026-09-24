@@ -208,8 +208,8 @@ impl MyApp {
                                         ui.label(egui::RichText::new("exiftool").color(egui::Color32::GREEN));
                                         ui.label(ver);
                                     } else {
-                                        ui.label(egui::RichText::new("❌ exiftool").color(egui::Color32::RED));
-                                        ui.label("Not found (Optional for now)");
+                                        ui.label(egui::RichText::new("exiftool").color(egui::Color32::RED));
+                                        ui.label("Not found");
                                     }
                                 });
                                 ui.horizontal(|ui| {
@@ -217,8 +217,8 @@ impl MyApp {
                                         ui.label(egui::RichText::new("ffmpeg").color(egui::Color32::GREEN));
                                         ui.label(ver);
                                     } else {
-                                        ui.label(egui::RichText::new("❌ ffmpeg").color(egui::Color32::RED));
-                                        ui.label("Not found");
+                                        ui.label(egui::RichText::new("ffmpeg").color(egui::Color32::RED));
+                                        ui.label("Not found (Optional)");
                                     }
                                 });
                             });

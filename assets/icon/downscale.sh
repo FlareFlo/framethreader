@@ -1,0 +1,1 @@
+magick icon_master.png -filter Lanczos -resize 512x512 icon_512.png
