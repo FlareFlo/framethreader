@@ -36,8 +36,10 @@ enum ThreaderState {
     Rendering {
         folder: PathBuf,
         handle: thread::JoinHandle<bool>,
-        progress_rx: std::sync::mpsc::Receiver<String>,
+        progress_rx: std::sync::mpsc::Receiver<(usize, String)>,
         current_progress: String,
+        current_frame: usize,
+        total_frames: usize,
     },
     Done {
         folder: PathBuf,
@@ -51,7 +53,7 @@ enum Codec {
     H264,
     HEVC,
     ProRes,
-    MJPEG,
+    AV1,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -126,10 +128,12 @@ impl eframe::App for ThreaderApp {
         }
 
         egui::CentralPanel::default().show(ui, |ui| {
-            ui.heading("Threader - FFMPEG Burst Processor");
-            ui.add_space(20.0);
-
-            match &mut self.state {
+            ui.vertical_centered(|ui| {
+                ui.add_space(40.0);
+                ui.heading("Threader - FFMPEG Burst Processor");
+                ui.add_space(20.0);
+    
+                match &mut self.state {
                 ThreaderState::Initial(folder_opt) => {
                     if let Some(folder) = folder_opt {
                         ui.label(format!("Selected Folder: {}", folder.display()));
@@ -170,10 +174,14 @@ impl eframe::App for ThreaderApp {
                         ui.heading("Output Settings");
                         ui.horizontal(|ui| {
                             ui.label("Codec:");
-                            ui.radio_value(&mut self.settings.codec, Codec::H264, "H.264 (MP4)");
-                            ui.radio_value(&mut self.settings.codec, Codec::HEVC, "HEVC (MP4)");
-                            ui.radio_value(&mut self.settings.codec, Codec::ProRes, "ProRes (MOV)");
-                            ui.radio_value(&mut self.settings.codec, Codec::MJPEG, "MJPEG (AVI)");
+                            ui.radio_value(&mut self.settings.codec, Codec::H264, "H.264 (MP4)")
+                                .on_hover_text("Universally compatible and widely supported. Great for general sharing and web upload.");
+                            ui.radio_value(&mut self.settings.codec, Codec::HEVC, "HEVC (MP4)")
+                                .on_hover_text("High Efficiency Video Coding. Yields much smaller file sizes than H.264, but requires newer hardware to play back.");
+                            ui.radio_value(&mut self.settings.codec, Codec::AV1, "AV1 (MP4)")
+                                .on_hover_text("Next-generation open codec. Unbeatable file sizes and quality, but encoding is extremely slow.");
+                            ui.radio_value(&mut self.settings.codec, Codec::ProRes, "ProRes (MOV)")
+                                .on_hover_text("Visually lossless, all-intra codec. Best for importing into video editors like Premiere or Resolve.");
                         });
                         ui.horizontal(|ui| {
                             ui.label("Timing:");
@@ -186,8 +194,9 @@ impl eframe::App for ThreaderApp {
                                 ui.add(egui::DragValue::new(&mut self.settings.custom_fps).speed(1.0).range(1.0..=240.0).suffix(" FPS"));
                             }
                         });
-                        if self.settings.codec == Codec::H264 || self.settings.codec == Codec::HEVC {
-                            ui.checkbox(&mut self.settings.all_intra, "All-Intra (I-Frames only)");
+                        if self.settings.codec == Codec::H264 || self.settings.codec == Codec::HEVC || self.settings.codec == Codec::AV1 {
+                            ui.checkbox(&mut self.settings.all_intra, "All-Intra (I-Frames only)")
+                                .on_hover_text("Forces every frame to be a standalone keyframe (like ProRes). Huge file sizes, but heavily reduces artifacting and makes editing in NLEs smooth.");
                         }
                     });
                     
@@ -246,13 +255,14 @@ impl eframe::App for ThreaderApp {
                                         if s_intra { ffmpeg_args.extend(["-x265-params", "keyint=1:min-keyint=1"]); }
                                         "mp4"
                                     },
+                                    Codec::AV1 => {
+                                        ffmpeg_args.extend(["-c:v", "libsvtav1", "-pix_fmt", "yuv420p10le", "-preset", "6", "-crf", "35"]);
+                                        if s_intra { ffmpeg_args.extend(["-g", "1"]); }
+                                        "mp4"
+                                    },
                                     Codec::ProRes => {
                                         ffmpeg_args.extend(["-c:v", "prores_ks", "-profile:v", "3", "-vendor", "apl0", "-pix_fmt", "yuv422p10le"]);
                                         "mov"
-                                    },
-                                    Codec::MJPEG => {
-                                        ffmpeg_args.extend(["-c:v", "mjpeg", "-q:v", "2", "-pix_fmt", "yuvj420p"]);
-                                        "avi"
                                     }
                                 };
                                 
@@ -280,7 +290,8 @@ impl eframe::App for ThreaderApp {
                                                 frame = l.replace("frame=", "");
                                             }
                                             if !out_time.is_empty() && !frame.is_empty() {
-                                                let _ = progress_tx.send(format!("Frame: {} | Time: {}", frame, out_time));
+                                                let frame_idx = frame.trim().parse::<usize>().unwrap_or(0);
+                                                let _ = progress_tx.send((frame_idx, format!("Time: {}", out_time)));
                                             }
                                         }
                                     }
@@ -294,18 +305,26 @@ impl eframe::App for ThreaderApp {
                                 handle,
                                 progress_rx,
                                 current_progress: "Starting FFMPEG...".to_string(),
+                                current_frame: 0,
+                                total_frames: burst.len(),
                             };
                         }
                     }
                 }
-                ThreaderState::Rendering { progress_rx, current_progress, .. } => {
+                ThreaderState::Rendering { progress_rx, current_progress, current_frame, total_frames, .. } => {
                     // Drain the channel for the latest progress
-                    while let Ok(msg) = progress_rx.try_recv() {
+                    while let Ok((f_idx, msg)) = progress_rx.try_recv() {
+                        *current_frame = f_idx;
                         *current_progress = msg;
                     }
                     
+                    let ratio = if *total_frames > 0 { (*current_frame as f32) / (*total_frames as f32) } else { 0.0 };
+                    
                     ui.spinner();
                     ui.label("Rendering output.mp4 via FFMPEG...");
+                    ui.add_space(10.0);
+                    ui.add(egui::ProgressBar::new(ratio).show_percentage());
+                    ui.label(format!("{}/{} Frames", current_frame, total_frames));
                     ui.label(current_progress.as_str());
                     ui.ctx().request_repaint();
                 }
@@ -330,6 +349,7 @@ impl eframe::App for ThreaderApp {
                     }
                 }
             }
+            });
         });
     }
 }
