@@ -16,6 +16,9 @@ pub fn main() {
         Ok(launcher::RUNMODE) => {
             launcher::realmain();
         }
+        Ok(threader::RUNMODE) => {
+            threader::realmain();
+        }
         Err(VarError::NotPresent) => {
             let child = Command::new(self_path.as_os_str()).env(LAUNCH_ENV_FLAG, launcher::RUNMODE).spawn().unwrap();
             children.push(child);

@@ -1,5 +1,5 @@
 [workspace]
-members = ["common","realbin/launcher", "realbin/wgpu_renderer"]
+members = ["common","realbin/launcher", "realbin/threader", "realbin/wgpu_renderer"]
 resolver = "3"
 
 [package]
@@ -10,6 +10,7 @@ edition = "2024"
 [dependencies]
 launcher = {path = "realbin/launcher"}
 wgpu_renderer = {path = "realbin/wgpu_renderer"}
+threader = {path = "realbin/threader"}
 
 [workspace.dependencies]
 wgpu = "30.0.1"
