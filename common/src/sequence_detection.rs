@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use time::{Duration, PlainDateTime};
 
-static ACCEPTED_IMAGE_EXTENSIONS: &[&str] = &["ARW", "HEIC", "JPG", "HEIF"];
+static ACCEPTED_IMAGE_EXTENSIONS: &[&str] = &["ARW", "HEIC", "JPG", "JPEG", "HEIF"];
 
 #[derive(serde::Deserialize, Debug)]
 struct ExifRaw {
@@ -127,19 +127,30 @@ pub fn scan_images(path: PathBuf) -> Vec<BurstFile> {
 
 pub fn detect_by_time(frames: Vec<BurstFile>, threshold: Duration) -> Vec<Vec<BurstFile>> {
     let mut bursts = vec![];
-    let mut last_td = PlainDateTime::MIN;
     let mut current_burst = vec![];
+    let mut last_td = None;
+
     for frame in frames {
         let created_now = *frame.created();
-        if last_td.add(threshold) >= *frame.created() {
-            current_burst.push(frame);
+        if let Some(last) = last_td {
+            if last + threshold >= created_now {
+                current_burst.push(frame);
+            } else {
+                if !current_burst.is_empty() {
+                    bursts.push(current_burst);
+                }
+                current_burst = vec![frame];
+            }
         } else {
-            bursts.push(current_burst);
-            current_burst = vec![];
+            current_burst.push(frame);
         }
-
-        last_td = created_now;
+        last_td = Some(created_now);
     }
+    
+    if !current_burst.is_empty() {
+        bursts.push(current_burst);
+    }
+    
     bursts
 }
 
