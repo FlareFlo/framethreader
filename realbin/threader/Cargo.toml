@@ -8,3 +8,4 @@ egui = {workspace = true}
 eframe = {workspace = true}
 rfd = {workspace = true}
 common = { path = "../../common" }
+time = {workspace = true}
