@@ -36,6 +36,8 @@ enum ThreaderState {
     Rendering {
         folder: PathBuf,
         handle: thread::JoinHandle<bool>,
+        progress_rx: std::sync::mpsc::Receiver<String>,
+        current_progress: String,
     },
     Done {
         folder: PathBuf,
@@ -81,7 +83,7 @@ impl eframe::App for ThreaderApp {
         
         if let ThreaderState::Rendering { handle, .. } = &self.state {
             if handle.is_finished() {
-                if let ThreaderState::Rendering { folder, handle } = std::mem::replace(&mut self.state, ThreaderState::Error(String::new())) {
+                if let ThreaderState::Rendering { folder, handle, .. } = std::mem::replace(&mut self.state, ThreaderState::Error(String::new())) {
                     let success = handle.join().unwrap_or(false);
                     self.state = ThreaderState::Done { folder, success };
                 }
@@ -153,24 +155,60 @@ impl eframe::App for ThreaderApp {
                         
                         if std::fs::write(&frames_txt_path, content).is_ok() {
                             let folder_clone = folder.clone();
+                            let (progress_tx, progress_rx) = std::sync::mpsc::channel();
+                            
                             let handle = thread::spawn(move || {
-                                let status = std::process::Command::new("ffmpeg")
+                                use std::process::Stdio;
+                                use std::io::{BufRead, BufReader};
+                                
+                                let mut child = std::process::Command::new("ffmpeg")
                                     .current_dir(&folder_clone)
-                                    .args(["-f", "concat", "-safe", "0", "-i", "frames.txt", "-c:v", "libx264", "-pix_fmt", "yuv420p", "output.mp4", "-y"])
-                                    .status();
-                                status.map(|s| s.success()).unwrap_or(false)
+                                    .args(["-f", "concat", "-safe", "0", "-i", "frames.txt", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-progress", "pipe:1", "output.mp4", "-y"])
+                                    .stdout(Stdio::piped())
+                                    .stderr(Stdio::null()) // suppress normal stderr logs to not pollute console
+                                    .spawn()
+                                    .expect("Failed to spawn FFMPEG");
+
+                                if let Some(stdout) = child.stdout.take() {
+                                    let reader = BufReader::new(stdout);
+                                    let mut out_time = String::new();
+                                    let mut frame = String::new();
+                                    
+                                    for line in reader.lines() {
+                                        if let Ok(l) = line {
+                                            if l.starts_with("out_time=") {
+                                                out_time = l.replace("out_time=", "");
+                                            } else if l.starts_with("frame=") {
+                                                frame = l.replace("frame=", "");
+                                            }
+                                            if !out_time.is_empty() && !frame.is_empty() {
+                                                let _ = progress_tx.send(format!("Frame: {} | Time: {}", frame, out_time));
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                child.wait().map(|s| s.success()).unwrap_or(false)
                             });
                             
                             self.state = ThreaderState::Rendering {
                                 folder: folder.clone(),
                                 handle,
+                                progress_rx,
+                                current_progress: "Starting FFMPEG...".to_string(),
                             };
                         }
                     }
                 }
-                ThreaderState::Rendering { .. } => {
+                ThreaderState::Rendering { progress_rx, current_progress, .. } => {
+                    // Drain the channel for the latest progress
+                    while let Ok(msg) = progress_rx.try_recv() {
+                        *current_progress = msg;
+                    }
+                    
                     ui.spinner();
                     ui.label("Rendering output.mp4 via FFMPEG...");
+                    ui.label(current_progress.as_str());
                     ui.ctx().request_repaint();
                 }
                 ThreaderState::Done { success, folder } => {
