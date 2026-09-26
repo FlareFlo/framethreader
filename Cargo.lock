@@ -702,6 +702,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "common"
+version = "0.1.0"
+dependencies = [
+ "getset",
+ "image",
+ "indicatif",
+ "kamadak-exif",
+ "rayon",
+ "serde",
+ "serde_json",
+ "time",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1922,18 +1936,13 @@ dependencies = [
 name = "launcher"
 version = "0.1.0"
 dependencies = [
+ "common",
  "eframe",
  "egui",
  "egui_extras",
  "env_logger",
- "getset",
- "image",
- "indicatif",
- "kamadak-exif",
  "rayon",
  "rfd",
- "serde",
- "serde_json",
  "time",
 ]
 

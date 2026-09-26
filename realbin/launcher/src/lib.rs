@@ -1,13 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
-mod burst;
-mod sequence_detection;
-
 pub const RUNMODE: &str = "launcher";
 
 use std::sync::Arc;
-use crate::sequence_detection::{detect_by_time, scan_images};
-use burst::BurstFile;
+use common::sequence_detection::{self, detect_by_time, scan_images};
+use common::burst::BurstFile;
 use eframe::egui;
 use egui::ProgressBar;
 use std::ops::Not;
@@ -17,7 +14,7 @@ use std::{mem, thread};
 use std::collections::HashMap;
 use std::sync::mpsc;
 use time::Duration;
-use crate::burst::EmbeddedImageType;
+use common::burst::EmbeddedImageType;
 
 pub fn realmain() {
     env_logger::init(); // Log to stderr (if you run with `RUST_LOG=debug`).

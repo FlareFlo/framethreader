@@ -1,5 +1,5 @@
 [workspace]
-members = ["realbin/launcher", "realbin/wgpu_renderer"]
+members = ["common","realbin/launcher", "realbin/wgpu_renderer"]
 resolver = "3"
 
 [package]
