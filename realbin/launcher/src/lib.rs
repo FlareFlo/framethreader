@@ -457,9 +457,25 @@ impl MyApp {
                                 }
                             });
                             row.col(|ui| {
-                                if ui.button("Preview Sequence").clicked() {
-                                    *active_preview = Some(i);
-                                }
+                                ui.horizontal(|ui| {
+                                    if ui.button("Preview Sequence").clicked() {
+                                        *active_preview = Some(i);
+                                    }
+                                    
+                                    if ui.button("Copy to...").clicked() {
+                                        if let Some(target_dir) = rfd::FileDialog::new().pick_folder() {
+                                            let paths: Vec<_> = group.iter().map(|f| f.path().clone()).collect();
+                                            std::thread::spawn(move || {
+                                                for path in paths {
+                                                    if let Some(name) = path.file_name() {
+                                                        let dest = target_dir.join(name);
+                                                        let _ = std::fs::copy(&path, dest);
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
+                                });
                             });
                         });
                     }
