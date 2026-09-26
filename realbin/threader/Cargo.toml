@@ -9,3 +9,4 @@ eframe = {workspace = true}
 rfd = {workspace = true}
 common = { path = "../../common" }
 time = {workspace = true}
+open = {workspace = true}

@@ -330,14 +330,30 @@ impl eframe::App for ThreaderApp {
                 }
                 ThreaderState::Done { success, folder } => {
                     if *success {
+                        let ext = match self.settings.codec {
+                            Codec::H264 | Codec::HEVC | Codec::AV1 => "mp4",
+                            Codec::ProRes => "mov",
+                        };
+                        let output_file = folder.join(format!("output.{}", ext));
+                        
                         ui.colored_label(egui::Color32::GREEN, "Success!");
-                        ui.label(format!("Saved to {}/output.mp4", folder.display()));
+                        ui.label(format!("Saved to {}", output_file.display()));
+                        ui.add_space(10.0);
+                        
+                        ui.horizontal(|ui| {
+                            if ui.button("Play Video").clicked() {
+                                let _ = open::that(&output_file);
+                            }
+                            if ui.button("Start Over").clicked() {
+                                self.state = ThreaderState::Initial(None);
+                            }
+                        });
                     } else {
                         ui.colored_label(egui::Color32::RED, "FFMPEG Failed.");
-                    }
-                    ui.add_space(10.0);
-                    if ui.button("Start Over").clicked() {
-                        self.state = ThreaderState::Initial(None);
+                        ui.add_space(10.0);
+                        if ui.button("Start Over").clicked() {
+                            self.state = ThreaderState::Initial(None);
+                        }
                     }
                 }
                 ThreaderState::Error(err) => {
