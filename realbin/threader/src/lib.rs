@@ -83,6 +83,7 @@ impl Preset {
                 codec: Codec::H264,
                 timing: Timing::TrueExifVfr,
                 custom_fps: 120.0,
+                high_precision_fps: 120,
                 all_intra: false,
             },
             Preset::HighEfficiency => RenderSettings {
@@ -90,6 +91,7 @@ impl Preset {
                 codec: Codec::AV1,
                 timing: Timing::TrueExifVfr,
                 custom_fps: 120.0,
+                high_precision_fps: 120,
                 all_intra: false,
             },
             Preset::Editing => RenderSettings {
@@ -97,6 +99,7 @@ impl Preset {
                 codec: Codec::ProRes,
                 timing: Timing::TrueExifPeak,
                 custom_fps: 120.0,
+                high_precision_fps: 120,
                 all_intra: false,
             },
             Preset::Custom => RenderSettings {
@@ -104,6 +107,7 @@ impl Preset {
                 codec: Codec::H264,
                 timing: Timing::TrueExifPeak,
                 custom_fps: 120.0,
+                high_precision_fps: 120,
                 all_intra: false,
             },
         }
@@ -116,6 +120,7 @@ struct RenderSettings {
     codec: Codec,
     timing: Timing,
     custom_fps: f32,
+    high_precision_fps: u32,
     all_intra: bool,
 }
 
@@ -229,7 +234,7 @@ impl eframe::App for ThreaderApp {
                         }
                         raw_durations.sort_by(|a, b| a.partial_cmp(b).unwrap());
                         let min_dur = raw_durations[0]; // Shortest duration = highest FPS
-                        (1.0 / min_dur).round() as u32
+                        (1.0 / min_dur).ceil() as u32
                     } else {
                         30
                     };
@@ -288,15 +293,27 @@ impl eframe::App for ThreaderApp {
                                 ui.end_row();
                             }
 
+                            // Prevent VFR for NLE codecs
+                            if (self.settings.codec == Codec::ProRes || self.settings.codec == Codec::DNxHR) && self.settings.timing == Timing::TrueExifVfr {
+                                self.settings.timing = Timing::TrueExifPeak;
+                            }
+
                             ui.label("Timing:");
                             ui.vertical(|ui| {
                                 ui.horizontal(|ui| {
-                                    ui.radio_value(&mut self.settings.timing, Timing::TrueExifVfr, "True EXIF (Native VFR)")
-                                        .on_hover_text("Bakes exact timestamps directly into the file. Perfectly smooth and efficient for web playback, but usually breaks when imported into video editors!");
+                                    if self.settings.codec == Codec::ProRes || self.settings.codec == Codec::DNxHR {
+                                        ui.add_enabled_ui(false, |ui| {
+                                            ui.radio_value(&mut self.settings.timing, Timing::TrueExifVfr, "True EXIF (Native VFR)")
+                                        }).response.on_disabled_hover_text("VFR is disabled for ProRes and DNxHR to prevent NLE timeline desync.");
+                                    } else {
+                                        ui.radio_value(&mut self.settings.timing, Timing::TrueExifVfr, "True EXIF (Native VFR)")
+                                            .on_hover_text("Bakes exact timestamps directly into the file. Perfectly smooth and efficient for web playback, but usually breaks when imported into video editors!");
+                                    }
                                     ui.radio_value(&mut self.settings.timing, Timing::TrueExifPeak, format!("True EXIF (Peak ~{} FPS CFR)", peak_fps))
-                                        .on_hover_text("Calculates the absolute fastest frame in your burst and sets it as the output base. Guarantees ZERO dropped frames while keeping file size lower than 120FPS.");
-                                    ui.radio_value(&mut self.settings.timing, Timing::TrueExifHighPrecision, "True EXIF (120 FPS CFR)")
-                                        .on_hover_text("Forces a flat 120 FPS output and duplicates frames to hit exact millisecond precision. Will result in massive file sizes for ProRes!");
+                                        .on_hover_text("Calculates the absolute fastest frame in your burst and sets it as the output base. Might drop the very rare occasional frame");
+                                    ui.radio_value(&mut self.settings.timing, Timing::TrueExifHighPrecision, "True EXIF (NLE High CFR):")
+                                        .on_hover_text("Forces a high constant framerate output and duplicates frames to hit exact millisecond precision. Produces large files");
+                                    ui.add_enabled(self.settings.timing == Timing::TrueExifHighPrecision, egui::DragValue::new(&mut self.settings.high_precision_fps).speed(1.0).range(24..=240).suffix(" FPS"));
                                 });
                                 ui.horizontal(|ui| {
                                     ui.radio_value(&mut self.settings.timing, Timing::FixedFpsAverage, format!("Fixed (Average {} FPS)", average_fps))
@@ -378,7 +395,7 @@ impl eframe::App for ThreaderApp {
                                 let fps_str = match settings.timing {
                                     Timing::CustomFps => settings.custom_fps.to_string(),
                                     Timing::FixedFpsAverage => average_fps.to_string(),
-                                    Timing::TrueExifHighPrecision => "120".to_string(), // 120 FPS CFR for NLEs to digest VFR accurately
+                                    Timing::TrueExifHighPrecision => settings.high_precision_fps.to_string(),
                                     Timing::TrueExifPeak => peak_fps.to_string(),
                                     Timing::TrueExifVfr => "vfr".to_string(),
                                 };
