@@ -256,6 +256,13 @@ impl eframe::App for ThreaderApp {
                             ui.radio_value(&mut self.settings.codec, Codec::ProRes, "ProRes (MOV)")
                                 .on_hover_text("Visually lossless, all-intra codec. Best for importing into video editors like Premiere or Resolve.");
                         });
+                        
+                        if self.settings.codec == Codec::HEVC {
+                            ui.label(egui::RichText::new("Warning: HEVC playback on Windows often requires paid extensions!")
+                                .color(egui::Color32::from_rgb(255, 165, 0))
+                                .small());
+                        }
+                        
                         ui.horizontal(|ui| {
                             ui.label("Timing:");
                             ui.radio_value(&mut self.settings.timing, Timing::TrueExifDynamic, "True EXIF (Dynamic CFR)")
