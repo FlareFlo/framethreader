@@ -61,7 +61,7 @@ enum Codec {
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum Timing {
     TrueExifVfr,
-    TrueExifDynamic,
+    TrueExifPeak,
     TrueExifHighPrecision,
     FixedFpsAverage,
     CustomFps,
@@ -95,14 +95,14 @@ impl Preset {
             Preset::Editing => RenderSettings {
                 preset: *self,
                 codec: Codec::ProRes,
-                timing: Timing::TrueExifDynamic,
+                timing: Timing::TrueExifPeak,
                 custom_fps: 120.0,
                 all_intra: false,
             },
             Preset::Custom => RenderSettings {
                 preset: *self,
                 codec: Codec::H264,
-                timing: Timing::TrueExifDynamic,
+                timing: Timing::TrueExifPeak,
                 custom_fps: 120.0,
                 all_intra: false,
             },
@@ -221,15 +221,15 @@ impl eframe::App for ThreaderApp {
                         30
                     };
                     
-                    let dynamic_fps = if burst.len() > 1 {
+                    let peak_fps = if burst.len() > 1 {
                         let mut raw_durations = Vec::with_capacity(burst.len() - 1);
                         for i in 0..burst.len() - 1 {
                             let dur = (*burst[i + 1].created() - *burst[i].created()).as_seconds_f32().max(0.01);
                             raw_durations.push(dur);
                         }
                         raw_durations.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                        let median = raw_durations[raw_durations.len() / 2];
-                        (1.0 / median).round() as u32
+                        let min_dur = raw_durations[0]; // Shortest duration = highest FPS
+                        (1.0 / min_dur).round() as u32
                     } else {
                         30
                     };
@@ -293,8 +293,8 @@ impl eframe::App for ThreaderApp {
                                 ui.horizontal(|ui| {
                                     ui.radio_value(&mut self.settings.timing, Timing::TrueExifVfr, "True EXIF (Native VFR)")
                                         .on_hover_text("Bakes exact timestamps directly into the file. Perfectly smooth and efficient for web playback, but usually breaks when imported into video editors!");
-                                    ui.radio_value(&mut self.settings.timing, Timing::TrueExifDynamic, format!("True EXIF (Dynamic ~{} FPS CFR)", dynamic_fps))
-                                        .on_hover_text("Calculates the median framerate of your burst and sets it as the output base to minimize duplicated frames while keeping timing roughly accurate.");
+                                    ui.radio_value(&mut self.settings.timing, Timing::TrueExifPeak, format!("True EXIF (Peak ~{} FPS CFR)", peak_fps))
+                                        .on_hover_text("Calculates the absolute fastest frame in your burst and sets it as the output base. Guarantees ZERO dropped frames while keeping file size lower than 120FPS.");
                                     ui.radio_value(&mut self.settings.timing, Timing::TrueExifHighPrecision, "True EXIF (120 FPS CFR)")
                                         .on_hover_text("Forces a flat 120 FPS output and duplicates frames to hit exact millisecond precision. Will result in massive file sizes for ProRes!");
                                 });
@@ -341,7 +341,7 @@ impl eframe::App for ThreaderApp {
                         let fixed_duration = match self.settings.timing {
                             Timing::CustomFps => Some(1.0 / self.settings.custom_fps),
                             Timing::FixedFpsAverage => Some(1.0 / (average_fps as f32)),
-                            Timing::TrueExifDynamic | Timing::TrueExifHighPrecision | Timing::TrueExifVfr => None,
+                            Timing::TrueExifPeak | Timing::TrueExifHighPrecision | Timing::TrueExifVfr => None,
                         };
                         
                         let mut all_durations = Vec::new();
@@ -365,15 +365,6 @@ impl eframe::App for ThreaderApp {
                                 content.push_str(&format!("duration {:.3}\n", end_dur));
                             }
                         }
-                        
-                        let dynamic_fps = if all_durations.is_empty() {
-                            30
-                        } else {
-                            all_durations.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                            let median = all_durations[all_durations.len() / 2];
-                            (1.0 / median).round() as u32
-                        };
-                        
                         if std::fs::write(&frames_txt_path, content).is_ok() {
                             let folder_clone = folder.clone();
                             let (progress_tx, progress_rx) = std::sync::mpsc::channel();
@@ -388,7 +379,7 @@ impl eframe::App for ThreaderApp {
                                     Timing::CustomFps => settings.custom_fps.to_string(),
                                     Timing::FixedFpsAverage => average_fps.to_string(),
                                     Timing::TrueExifHighPrecision => "120".to_string(), // 120 FPS CFR for NLEs to digest VFR accurately
-                                    Timing::TrueExifDynamic => dynamic_fps.to_string(),
+                                    Timing::TrueExifPeak => peak_fps.to_string(),
                                     Timing::TrueExifVfr => "vfr".to_string(),
                                 };
                                 
