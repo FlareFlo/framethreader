@@ -59,6 +59,7 @@ enum Codec {
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum Timing {
+    TrueExifVfr,
     TrueExifDynamic,
     TrueExifHighPrecision,
     FixedFpsAverage,
@@ -80,14 +81,14 @@ impl Preset {
             Preset::WebPortable => RenderSettings {
                 preset: *self,
                 codec: Codec::H264,
-                timing: Timing::FixedFpsAverage,
+                timing: Timing::TrueExifVfr,
                 custom_fps: 120.0,
                 all_intra: false,
             },
             Preset::HighEfficiency => RenderSettings {
                 preset: *self,
                 codec: Codec::AV1,
-                timing: Timing::FixedFpsAverage,
+                timing: Timing::TrueExifVfr,
                 custom_fps: 120.0,
                 all_intra: false,
             },
@@ -120,7 +121,7 @@ struct RenderSettings {
 
 impl Default for RenderSettings {
     fn default() -> Self {
-        Preset::Custom.to_settings()
+        Preset::WebPortable.to_settings()
     }
 }
 
@@ -216,8 +217,6 @@ impl eframe::App for ThreaderApp {
                     ui.group(|ui| {
                         ui.heading("Output Settings");
                         
-                        let old_settings = self.settings;
-
                         egui::Grid::new("settings_grid").num_columns(2).spacing([15.0, 10.0]).show(ui, |ui| {
                             ui.label("Preset:");
                             let mut selected = self.settings.preset;
@@ -244,6 +243,8 @@ impl eframe::App for ThreaderApp {
                             }
                             ui.end_row();
 
+                            let old_settings = self.settings;
+
                             ui.label("Codec:");
                             ui.horizontal(|ui| {
                                 ui.radio_value(&mut self.settings.codec, Codec::H264, "H.264 (MP4)")
@@ -268,6 +269,8 @@ impl eframe::App for ThreaderApp {
                             ui.label("Timing:");
                             ui.vertical(|ui| {
                                 ui.horizontal(|ui| {
+                                    ui.radio_value(&mut self.settings.timing, Timing::TrueExifVfr, "True EXIF (Native VFR)")
+                                        .on_hover_text("Bakes exact timestamps directly into the file. Perfectly smooth and efficient for web playback, but usually breaks when imported into video editors!");
                                     ui.radio_value(&mut self.settings.timing, Timing::TrueExifDynamic, "True EXIF (Dynamic CFR)")
                                         .on_hover_text("Calculates the median framerate of your burst and sets it as the output base to minimize duplicated frames while keeping timing roughly accurate.");
                                     ui.radio_value(&mut self.settings.timing, Timing::TrueExifHighPrecision, "True EXIF (120FPS CFR)")
@@ -276,9 +279,6 @@ impl eframe::App for ThreaderApp {
                                 ui.horizontal(|ui| {
                                     ui.radio_value(&mut self.settings.timing, Timing::FixedFpsAverage, "Fixed (Average FPS)")
                                         .on_hover_text("Ignores camera stutter and spaces all frames perfectly evenly across the total time of the burst.");
-                                    ui.radio_value(&mut self.settings.timing, Timing::FixedFps(24), "Fixed 24 FPS");
-                                    ui.radio_value(&mut self.settings.timing, Timing::FixedFps(30), "Fixed 30 FPS");
-                                    ui.radio_value(&mut self.settings.timing, Timing::FixedFps(60), "Fixed 60 FPS");
                                 });
                                 ui.horizontal(|ui| {
                                     ui.radio_value(&mut self.settings.timing, Timing::CustomFps, "Custom:");
@@ -297,11 +297,10 @@ impl eframe::App for ThreaderApp {
                                 }).response.on_disabled_hover_text("ProRes is a visually lossless intra-frame codec by nature, so this is inherently active.");
                             }
                             ui.end_row();
+                            if old_settings != self.settings {
+                                self.settings.preset = Preset::Custom;
+                            }
                         });
-                        
-                        if old_settings != self.settings {
-                            self.settings.preset = Preset::Custom;
-                        }
                     });
                     
                     ui.add_space(10.0);
@@ -321,7 +320,7 @@ impl eframe::App for ThreaderApp {
                             Timing::FixedFps(fps) => Some(1.0 / (fps as f32)),
                             Timing::CustomFps => Some(1.0 / self.settings.custom_fps),
                             Timing::FixedFpsAverage => Some(1.0 / (average_fps as f32)),
-                            Timing::TrueExifDynamic | Timing::TrueExifHighPrecision => None,
+                            Timing::TrueExifDynamic | Timing::TrueExifHighPrecision | Timing::TrueExifVfr => None,
                         };
                         
                         let mut all_durations = Vec::new();
@@ -370,9 +369,15 @@ impl eframe::App for ThreaderApp {
                                     Timing::FixedFpsAverage => average_fps.to_string(),
                                     Timing::TrueExifHighPrecision => "120".to_string(), // 120 FPS CFR for NLEs to digest VFR accurately
                                     Timing::TrueExifDynamic => dynamic_fps.to_string(),
+                                    Timing::TrueExifVfr => "vfr".to_string(),
                                 };
                                 
-                                let mut ffmpeg_args = vec!["-f", "concat", "-safe", "0", "-i", "frames.txt", "-r", &fps_str, "-fps_mode", "cfr"];
+                                let mut ffmpeg_args = vec!["-f", "concat", "-safe", "0", "-i", "frames.txt"];
+                                if settings.timing == Timing::TrueExifVfr {
+                                    ffmpeg_args.extend(["-fps_mode", "vfr"]);
+                                } else {
+                                    ffmpeg_args.extend(["-r", &fps_str, "-fps_mode", "cfr"]);
+                                }
                                 
                                 let ext = match settings.codec {
                                     Codec::H264 => {
