@@ -275,13 +275,15 @@ impl eframe::App for ThreaderApp {
                             ui.radio_value(&mut self.settings.timing, Timing::FixedFps(30), "Fixed 30 FPS");
                             ui.radio_value(&mut self.settings.timing, Timing::FixedFps(60), "Fixed 60 FPS");
                             ui.radio_value(&mut self.settings.timing, Timing::CustomFps, "Custom:");
-                            if self.settings.timing == Timing::CustomFps {
-                                ui.add(egui::DragValue::new(&mut self.settings.custom_fps).speed(1.0).range(1.0..=240.0).suffix(" FPS"));
-                            }
+                            ui.add_enabled(self.settings.timing == Timing::CustomFps, egui::DragValue::new(&mut self.settings.custom_fps).speed(1.0).range(1.0..=240.0).suffix(" FPS"));
                         });
                         if self.settings.codec == Codec::H264 || self.settings.codec == Codec::HEVC || self.settings.codec == Codec::AV1 {
                             ui.checkbox(&mut self.settings.all_intra, "All-Intra (I-Frames only)")
-                                .on_hover_text("Forces every frame to be a standalone keyframe (like ProRes). Huge file sizes, but heavily reduces artifacting and makes editing in NLEs smooth.");
+                                .on_hover_text("Forces every frame to be a standalone keyframe. Huge file sizes, but heavily reduces artifacting and makes editing in NLEs faster.");
+                        } else {
+                            ui.add_enabled_ui(false, |ui| {
+                                ui.checkbox(&mut true, "All-Intra (I-Frames only)")
+                            }).response.on_disabled_hover_text("ProRes is a visually lossless intra-frame codec by nature, so this is inherently active.");
                         }
                         
                         if old_settings != self.settings {
