@@ -58,7 +58,9 @@ enum Codec {
 
 #[derive(PartialEq, Clone, Copy)]
 enum Timing {
-    TrueExif,
+    TrueExifDynamic,
+    TrueExifHighPrecision,
+    FixedFpsAverage,
     FixedFps(u32),
     CustomFps,
 }
@@ -74,7 +76,7 @@ impl Default for RenderSettings {
     fn default() -> Self {
         Self {
             codec: Codec::H264,
-            timing: Timing::TrueExif,
+            timing: Timing::TrueExifDynamic,
             custom_fps: 120.0,
             all_intra: false,
         }
@@ -185,7 +187,12 @@ impl eframe::App for ThreaderApp {
                         });
                         ui.horizontal(|ui| {
                             ui.label("Timing:");
-                            ui.radio_value(&mut self.settings.timing, Timing::TrueExif, "True EXIF Timestamps");
+                            ui.radio_value(&mut self.settings.timing, Timing::TrueExifDynamic, "True EXIF (Dynamic CFR)")
+                                .on_hover_text("Calculates the median framerate of your burst and sets it as the output base to minimize duplicated frames while keeping timing roughly accurate.");
+                            ui.radio_value(&mut self.settings.timing, Timing::TrueExifHighPrecision, "True EXIF (120FPS CFR)")
+                                .on_hover_text("Forces a flat 120 FPS output and duplicates frames to hit exact millisecond precision. Will result in massive file sizes for ProRes!");
+                            ui.radio_value(&mut self.settings.timing, Timing::FixedFpsAverage, "Fixed (Average FPS)")
+                                .on_hover_text("Ignores camera stutter and spaces all frames perfectly evenly across the total time of the burst.");
                             ui.radio_value(&mut self.settings.timing, Timing::FixedFps(24), "Fixed 24 FPS");
                             ui.radio_value(&mut self.settings.timing, Timing::FixedFps(30), "Fixed 30 FPS");
                             ui.radio_value(&mut self.settings.timing, Timing::FixedFps(60), "Fixed 60 FPS");
@@ -206,11 +213,21 @@ impl eframe::App for ThreaderApp {
                         let frames_txt_path = folder.join("frames.txt");
                         let mut content = String::from("ffconcat version 1.0\n");
                         
+                        let average_fps = if burst.len() > 1 {
+                            let total_dur = (*burst.last().unwrap().created() - *burst.first().unwrap().created()).as_seconds_f32().max(0.01);
+                            ((burst.len() - 1) as f32 / total_dur).round() as u32
+                        } else {
+                            30
+                        };
+                        
                         let fixed_duration = match self.settings.timing {
                             Timing::FixedFps(fps) => Some(1.0 / (fps as f32)),
                             Timing::CustomFps => Some(1.0 / self.settings.custom_fps),
-                            Timing::TrueExif => None,
+                            Timing::FixedFpsAverage => Some(1.0 / (average_fps as f32)),
+                            Timing::TrueExifDynamic | Timing::TrueExifHighPrecision => None,
                         };
+                        
+                        let mut all_durations = Vec::new();
                         
                         for i in 0..burst.len() {
                             let frame = &burst[i];
@@ -224,12 +241,21 @@ impl eframe::App for ThreaderApp {
                                     let duration = *burst[i + 1].created() - *frame.created();
                                     duration.as_seconds_f32().max(0.01)
                                 };
+                                all_durations.push(seconds);
                                 content.push_str(&format!("duration {:.3}\n", seconds));
                             } else {
-                                let end_dur = fixed_duration.unwrap_or(0.033);
+                                let end_dur = fixed_duration.unwrap_or(if all_durations.is_empty() { 0.033 } else { all_durations.last().copied().unwrap() });
                                 content.push_str(&format!("duration {:.3}\n", end_dur));
                             }
                         }
+                        
+                        let dynamic_fps = if all_durations.is_empty() {
+                            30
+                        } else {
+                            all_durations.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                            let median = all_durations[all_durations.len() / 2];
+                            (1.0 / median).round() as u32
+                        };
                         
                         if std::fs::write(&frames_txt_path, content).is_ok() {
                             let folder_clone = folder.clone();
@@ -237,12 +263,22 @@ impl eframe::App for ThreaderApp {
                             
                             let s_codec = self.settings.codec;
                             let s_intra = self.settings.all_intra;
+                            let s_timing = self.settings.timing;
+                            let s_custom_fps = self.settings.custom_fps;
                             
                             let handle = thread::spawn(move || {
                                 use std::process::Stdio;
                                 use std::io::{BufRead, BufReader};
                                 
-                                let mut ffmpeg_args = vec!["-f", "concat", "-safe", "0", "-i", "frames.txt"];
+                                let fps_str = match s_timing {
+                                    Timing::FixedFps(fps) => fps.to_string(),
+                                    Timing::CustomFps => s_custom_fps.to_string(),
+                                    Timing::FixedFpsAverage => average_fps.to_string(),
+                                    Timing::TrueExifHighPrecision => "120".to_string(), // 120 FPS CFR for NLEs to digest VFR accurately
+                                    Timing::TrueExifDynamic => dynamic_fps.to_string(),
+                                };
+                                
+                                let mut ffmpeg_args = vec!["-f", "concat", "-safe", "0", "-i", "frames.txt", "-r", &fps_str, "-fps_mode", "cfr"];
                                 
                                 let ext = match s_codec {
                                     Codec::H264 => {
