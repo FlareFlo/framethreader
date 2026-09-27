@@ -216,7 +216,9 @@ impl eframe::App for ThreaderApp {
                     ui.group(|ui| {
                         ui.heading("Output Settings");
                         
-                        ui.horizontal(|ui| {
+                        let old_settings = self.settings;
+
+                        egui::Grid::new("settings_grid").num_columns(2).spacing([15.0, 10.0]).show(ui, |ui| {
                             ui.label("Preset:");
                             let mut selected = self.settings.preset;
                             egui::ComboBox::from_id_salt("preset_combo")
@@ -240,51 +242,62 @@ impl eframe::App for ThreaderApp {
                                     self.settings = selected.to_settings();
                                 }
                             }
-                        });
-                        ui.add_space(5.0);
-                        
-                        let old_settings = self.settings;
+                            ui.end_row();
 
-                        ui.horizontal(|ui| {
                             ui.label("Codec:");
-                            ui.radio_value(&mut self.settings.codec, Codec::H264, "H.264 (MP4)")
-                                .on_hover_text("Universally compatible and widely supported. Great for general sharing and web upload.");
-                            ui.radio_value(&mut self.settings.codec, Codec::HEVC, "HEVC (MP4)")
-                                .on_hover_text("High Efficiency Video Coding. Yields much smaller file sizes than H.264, but requires newer hardware to play back.");
-                            ui.radio_value(&mut self.settings.codec, Codec::AV1, "AV1 (MP4)")
-                                .on_hover_text("Next-generation open codec. Unbeatable file sizes and quality, but encoding is extremely slow.");
-                            ui.radio_value(&mut self.settings.codec, Codec::ProRes, "ProRes (MOV)")
-                                .on_hover_text("Visually lossless, all-intra codec. Best for importing into video editors like Premiere or Resolve.");
-                        });
-                        
-                        if self.settings.codec == Codec::HEVC {
-                            ui.label(egui::RichText::new("Warning: HEVC playback on Windows often requires paid extensions!")
-                                .color(egui::Color32::from_rgb(255, 165, 0))
-                                .small());
-                        }
-                        
-                        ui.horizontal(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.radio_value(&mut self.settings.codec, Codec::H264, "H.264 (MP4)")
+                                    .on_hover_text("Universally compatible and widely supported. Great for general sharing and web upload.");
+                                ui.radio_value(&mut self.settings.codec, Codec::HEVC, "HEVC (MP4)")
+                                    .on_hover_text("High Efficiency Video Coding. Yields much smaller file sizes than H.264, but requires newer hardware to play back.");
+                                ui.radio_value(&mut self.settings.codec, Codec::AV1, "AV1 (MP4)")
+                                    .on_hover_text("Next-generation open codec. Unbeatable file sizes and quality, but encoding is extremely slow.");
+                                ui.radio_value(&mut self.settings.codec, Codec::ProRes, "ProRes (MOV)")
+                                    .on_hover_text("Visually lossless, all-intra codec. Best for importing into video editors like Premiere or Resolve.");
+                            });
+                            ui.end_row();
+
+                            if self.settings.codec == Codec::HEVC {
+                                ui.label("");
+                                ui.label(egui::RichText::new("Warning: HEVC playback on Windows often requires paid extensions!")
+                                    .color(egui::Color32::from_rgb(255, 165, 0))
+                                    .small());
+                                ui.end_row();
+                            }
+
                             ui.label("Timing:");
-                            ui.radio_value(&mut self.settings.timing, Timing::TrueExifDynamic, "True EXIF (Dynamic CFR)")
-                                .on_hover_text("Calculates the median framerate of your burst and sets it as the output base to minimize duplicated frames while keeping timing roughly accurate.");
-                            ui.radio_value(&mut self.settings.timing, Timing::TrueExifHighPrecision, "True EXIF (120FPS CFR)")
-                                .on_hover_text("Forces a flat 120 FPS output and duplicates frames to hit exact millisecond precision. Will result in massive file sizes for ProRes!");
-                            ui.radio_value(&mut self.settings.timing, Timing::FixedFpsAverage, "Fixed (Average FPS)")
-                                .on_hover_text("Ignores camera stutter and spaces all frames perfectly evenly across the total time of the burst.");
-                            ui.radio_value(&mut self.settings.timing, Timing::FixedFps(24), "Fixed 24 FPS");
-                            ui.radio_value(&mut self.settings.timing, Timing::FixedFps(30), "Fixed 30 FPS");
-                            ui.radio_value(&mut self.settings.timing, Timing::FixedFps(60), "Fixed 60 FPS");
-                            ui.radio_value(&mut self.settings.timing, Timing::CustomFps, "Custom:");
-                            ui.add_enabled(self.settings.timing == Timing::CustomFps, egui::DragValue::new(&mut self.settings.custom_fps).speed(1.0).range(1.0..=240.0).suffix(" FPS"));
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.radio_value(&mut self.settings.timing, Timing::TrueExifDynamic, "True EXIF (Dynamic CFR)")
+                                        .on_hover_text("Calculates the median framerate of your burst and sets it as the output base to minimize duplicated frames while keeping timing roughly accurate.");
+                                    ui.radio_value(&mut self.settings.timing, Timing::TrueExifHighPrecision, "True EXIF (120FPS CFR)")
+                                        .on_hover_text("Forces a flat 120 FPS output and duplicates frames to hit exact millisecond precision. Will result in massive file sizes for ProRes!");
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.radio_value(&mut self.settings.timing, Timing::FixedFpsAverage, "Fixed (Average FPS)")
+                                        .on_hover_text("Ignores camera stutter and spaces all frames perfectly evenly across the total time of the burst.");
+                                    ui.radio_value(&mut self.settings.timing, Timing::FixedFps(24), "Fixed 24 FPS");
+                                    ui.radio_value(&mut self.settings.timing, Timing::FixedFps(30), "Fixed 30 FPS");
+                                    ui.radio_value(&mut self.settings.timing, Timing::FixedFps(60), "Fixed 60 FPS");
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.radio_value(&mut self.settings.timing, Timing::CustomFps, "Custom:");
+                                    ui.add_enabled(self.settings.timing == Timing::CustomFps, egui::DragValue::new(&mut self.settings.custom_fps).speed(1.0).range(1.0..=240.0).suffix(" FPS"));
+                                });
+                            });
+                            ui.end_row();
+
+                            ui.label("");
+                            if self.settings.codec == Codec::H264 || self.settings.codec == Codec::HEVC || self.settings.codec == Codec::AV1 {
+                                ui.checkbox(&mut self.settings.all_intra, "All-Intra (I-Frames only)")
+                                    .on_hover_text("Forces every frame to be a standalone keyframe. Huge file sizes, but heavily reduces artifacting and makes editing in NLEs faster.");
+                            } else {
+                                ui.add_enabled_ui(false, |ui| {
+                                    ui.checkbox(&mut true, "All-Intra (I-Frames only)")
+                                }).response.on_disabled_hover_text("ProRes is a visually lossless intra-frame codec by nature, so this is inherently active.");
+                            }
+                            ui.end_row();
                         });
-                        if self.settings.codec == Codec::H264 || self.settings.codec == Codec::HEVC || self.settings.codec == Codec::AV1 {
-                            ui.checkbox(&mut self.settings.all_intra, "All-Intra (I-Frames only)")
-                                .on_hover_text("Forces every frame to be a standalone keyframe. Huge file sizes, but heavily reduces artifacting and makes editing in NLEs faster.");
-                        } else {
-                            ui.add_enabled_ui(false, |ui| {
-                                ui.checkbox(&mut true, "All-Intra (I-Frames only)")
-                            }).response.on_disabled_hover_text("ProRes is a visually lossless intra-frame codec by nature, so this is inherently active.");
-                        }
                         
                         if old_settings != self.settings {
                             self.settings.preset = Preset::Custom;
