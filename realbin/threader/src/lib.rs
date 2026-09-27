@@ -214,6 +214,26 @@ impl eframe::App for ThreaderApp {
                     ui.label(format!("Frames found: {}", burst.len()));
                     ui.add_space(10.0);
                     
+                    let average_fps = if burst.len() > 1 {
+                        let total_dur = (*burst.last().unwrap().created() - *burst.first().unwrap().created()).as_seconds_f32().max(0.01);
+                        ((burst.len() - 1) as f32 / total_dur).round() as u32
+                    } else {
+                        30
+                    };
+                    
+                    let dynamic_fps = if burst.len() > 1 {
+                        let mut raw_durations = Vec::with_capacity(burst.len() - 1);
+                        for i in 0..burst.len() - 1 {
+                            let dur = (*burst[i + 1].created() - *burst[i].created()).as_seconds_f32().max(0.01);
+                            raw_durations.push(dur);
+                        }
+                        raw_durations.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                        let median = raw_durations[raw_durations.len() / 2];
+                        (1.0 / median).round() as u32
+                    } else {
+                        30
+                    };
+                    
                     ui.group(|ui| {
                         ui.heading("Output Settings");
                         
@@ -271,13 +291,13 @@ impl eframe::App for ThreaderApp {
                                 ui.horizontal(|ui| {
                                     ui.radio_value(&mut self.settings.timing, Timing::TrueExifVfr, "True EXIF (Native VFR)")
                                         .on_hover_text("Bakes exact timestamps directly into the file. Perfectly smooth and efficient for web playback, but usually breaks when imported into video editors!");
-                                    ui.radio_value(&mut self.settings.timing, Timing::TrueExifDynamic, "True EXIF (Dynamic CFR)")
+                                    ui.radio_value(&mut self.settings.timing, Timing::TrueExifDynamic, format!("True EXIF (Dynamic ~{} FPS CFR)", dynamic_fps))
                                         .on_hover_text("Calculates the median framerate of your burst and sets it as the output base to minimize duplicated frames while keeping timing roughly accurate.");
-                                    ui.radio_value(&mut self.settings.timing, Timing::TrueExifHighPrecision, "True EXIF (120FPS CFR)")
+                                    ui.radio_value(&mut self.settings.timing, Timing::TrueExifHighPrecision, "True EXIF (120 FPS CFR)")
                                         .on_hover_text("Forces a flat 120 FPS output and duplicates frames to hit exact millisecond precision. Will result in massive file sizes for ProRes!");
                                 });
                                 ui.horizontal(|ui| {
-                                    ui.radio_value(&mut self.settings.timing, Timing::FixedFpsAverage, "Fixed (Average FPS)")
+                                    ui.radio_value(&mut self.settings.timing, Timing::FixedFpsAverage, format!("Fixed (Average {} FPS)", average_fps))
                                         .on_hover_text("Ignores camera stutter and spaces all frames perfectly evenly across the total time of the burst.");
                                 });
                                 ui.horizontal(|ui| {
