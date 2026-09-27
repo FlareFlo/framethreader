@@ -1,3 +1,4 @@
+use std::cmp::PartialEq;
 use common::burst::BurstFile;
 use common::sequence_detection::{self, detect_by_time, scan_images};
 use eframe::egui;
@@ -48,7 +49,7 @@ enum ThreaderState {
     Error(String),
 }
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 enum Codec {
     H264,
     HEVC,
@@ -56,7 +57,7 @@ enum Codec {
     AV1,
 }
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 enum Timing {
     TrueExifDynamic,
     TrueExifHighPrecision,
@@ -65,21 +66,61 @@ enum Timing {
     CustomFps,
 }
 
+#[derive(PartialEq, Clone, Copy, Debug)]
+enum Preset {
+    Custom,
+    WebPortable,
+    HighEfficiency,
+    Editing,
+}
+
+impl Preset {
+    pub(crate) fn to_settings(&self) -> RenderSettings {
+        match self {
+            Preset::WebPortable => RenderSettings {
+                preset: *self,
+                codec: Codec::H264,
+                timing: Timing::FixedFpsAverage,
+                custom_fps: 120.0,
+                all_intra: false,
+            },
+            Preset::HighEfficiency => RenderSettings {
+                preset: *self,
+                codec: Codec::AV1,
+                timing: Timing::FixedFpsAverage,
+                custom_fps: 120.0,
+                all_intra: false,
+            },
+            Preset::Editing => RenderSettings {
+                preset: *self,
+                codec: Codec::ProRes,
+                timing: Timing::TrueExifDynamic,
+                custom_fps: 120.0,
+                all_intra: false,
+            },
+            Preset::Custom => RenderSettings {
+                preset: *self,
+                codec: Codec::H264,
+                timing: Timing::TrueExifDynamic,
+                custom_fps: 120.0,
+                all_intra: false,
+            },
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Copy, Clone)]
 struct RenderSettings {
+    preset: Preset,
     codec: Codec,
     timing: Timing,
     custom_fps: f32,
-    all_intra: bool, // Force I-frames for H264/HEVC
+    all_intra: bool,
 }
 
 impl Default for RenderSettings {
     fn default() -> Self {
-        Self {
-            codec: Codec::H264,
-            timing: Timing::TrueExifDynamic,
-            custom_fps: 120.0,
-            all_intra: false,
-        }
+        Preset::Custom.to_settings()
     }
 }
 
@@ -174,6 +215,36 @@ impl eframe::App for ThreaderApp {
                     
                     ui.group(|ui| {
                         ui.heading("Output Settings");
+                        
+                        ui.horizontal(|ui| {
+                            ui.label("Preset:");
+                            let mut selected = self.settings.preset;
+                            egui::ComboBox::from_id_salt("preset_combo")
+                                .selected_text(match selected {
+                                    Preset::Custom => "Custom",
+                                    Preset::WebPortable => "Web / Portable (H.264 MP4)",
+                                    Preset::HighEfficiency => "High Efficiency (AV1 MP4)",
+                                    Preset::Editing => "Editing (ProRes MOV)",
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut selected, Preset::Custom, "Custom");
+                                    ui.selectable_value(&mut selected, Preset::WebPortable, "Web / Portable (H.264 MP4)");
+                                    ui.selectable_value(&mut selected, Preset::HighEfficiency, "High Efficiency (AV1 MP4)");
+                                    ui.selectable_value(&mut selected, Preset::Editing, "Editing (ProRes MOV)");
+                                });
+                                
+                            if selected != self.settings.preset {
+                                if selected == Preset::Custom {
+                                    self.settings.preset = Preset::Custom;
+                                } else {
+                                    self.settings = selected.to_settings();
+                                }
+                            }
+                        });
+                        ui.add_space(5.0);
+                        
+                        let old_settings = self.settings;
+
                         ui.horizontal(|ui| {
                             ui.label("Codec:");
                             ui.radio_value(&mut self.settings.codec, Codec::H264, "H.264 (MP4)")
@@ -204,6 +275,10 @@ impl eframe::App for ThreaderApp {
                         if self.settings.codec == Codec::H264 || self.settings.codec == Codec::HEVC || self.settings.codec == Codec::AV1 {
                             ui.checkbox(&mut self.settings.all_intra, "All-Intra (I-Frames only)")
                                 .on_hover_text("Forces every frame to be a standalone keyframe (like ProRes). Huge file sizes, but heavily reduces artifacting and makes editing in NLEs smooth.");
+                        }
+                        
+                        if old_settings != self.settings {
+                            self.settings.preset = Preset::Custom;
                         }
                     });
                     
@@ -260,19 +335,16 @@ impl eframe::App for ThreaderApp {
                         if std::fs::write(&frames_txt_path, content).is_ok() {
                             let folder_clone = folder.clone();
                             let (progress_tx, progress_rx) = std::sync::mpsc::channel();
-                            
-                            let s_codec = self.settings.codec;
-                            let s_intra = self.settings.all_intra;
-                            let s_timing = self.settings.timing;
-                            let s_custom_fps = self.settings.custom_fps;
-                            
+
+                            let settings = self.settings;
+
                             let handle = thread::spawn(move || {
                                 use std::process::Stdio;
                                 use std::io::{BufRead, BufReader};
                                 
-                                let fps_str = match s_timing {
+                                let fps_str = match settings.timing {
                                     Timing::FixedFps(fps) => fps.to_string(),
-                                    Timing::CustomFps => s_custom_fps.to_string(),
+                                    Timing::CustomFps => settings.custom_fps.to_string(),
                                     Timing::FixedFpsAverage => average_fps.to_string(),
                                     Timing::TrueExifHighPrecision => "120".to_string(), // 120 FPS CFR for NLEs to digest VFR accurately
                                     Timing::TrueExifDynamic => dynamic_fps.to_string(),
@@ -280,20 +352,20 @@ impl eframe::App for ThreaderApp {
                                 
                                 let mut ffmpeg_args = vec!["-f", "concat", "-safe", "0", "-i", "frames.txt", "-r", &fps_str, "-fps_mode", "cfr"];
                                 
-                                let ext = match s_codec {
+                                let ext = match settings.codec {
                                     Codec::H264 => {
-                                        ffmpeg_args.extend(["-c:v", "libx264", "-pix_fmt", "yuv420p"]);
-                                        if s_intra { ffmpeg_args.extend(["-g", "1", "-keyint_min", "1"]); }
+                                        ffmpeg_args.extend(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]);
+                                        if settings.all_intra { ffmpeg_args.extend(["-g", "1", "-keyint_min", "1"]); }
                                         "mp4"
                                     },
                                     Codec::HEVC => {
-                                        ffmpeg_args.extend(["-c:v", "libx265", "-pix_fmt", "yuv420p"]);
-                                        if s_intra { ffmpeg_args.extend(["-x265-params", "keyint=1:min-keyint=1"]); }
+                                        ffmpeg_args.extend(["-c:v", "libx265", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]);
+                                        if settings.all_intra { ffmpeg_args.extend(["-x265-params", "keyint=1:min-keyint=1"]); }
                                         "mp4"
                                     },
                                     Codec::AV1 => {
-                                        ffmpeg_args.extend(["-c:v", "libsvtav1", "-pix_fmt", "yuv420p10le", "-preset", "6", "-crf", "35"]);
-                                        if s_intra { ffmpeg_args.extend(["-g", "1"]); }
+                                        ffmpeg_args.extend(["-c:v", "libsvtav1", "-pix_fmt", "yuv420p10le", "-preset", "6", "-crf", "35", "-movflags", "+faststart"]);
+                                        if settings.all_intra { ffmpeg_args.extend(["-g", "1"]); }
                                         "mp4"
                                     },
                                     Codec::ProRes => {
