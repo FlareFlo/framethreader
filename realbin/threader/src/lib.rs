@@ -54,6 +54,7 @@ enum Codec {
     H264,
     HEVC,
     ProRes,
+    DNxHR,
     AV1,
 }
 
@@ -63,7 +64,6 @@ enum Timing {
     TrueExifDynamic,
     TrueExifHighPrecision,
     FixedFpsAverage,
-    FixedFps(u32),
     CustomFps,
 }
 
@@ -275,6 +275,8 @@ impl eframe::App for ThreaderApp {
                                     .on_hover_text("Next-generation open codec. Unbeatable file sizes and quality, but encoding is extremely slow.");
                                 ui.radio_value(&mut self.settings.codec, Codec::ProRes, "ProRes (MOV)")
                                     .on_hover_text("Visually lossless, all-intra codec. Best for importing into video editors like Premiere or Resolve.");
+                                ui.radio_value(&mut self.settings.codec, Codec::DNxHR, "DNxHR (MOV)")
+                                    .on_hover_text("Avid's visually lossless, all-intra editing codec. Excellent performance on NLEs.");
                             });
                             ui.end_row();
 
@@ -314,7 +316,7 @@ impl eframe::App for ThreaderApp {
                             } else {
                                 ui.add_enabled_ui(false, |ui| {
                                     ui.checkbox(&mut true, "All-Intra (I-Frames only)")
-                                }).response.on_disabled_hover_text("ProRes is a visually lossless intra-frame codec by nature, so this is inherently active.");
+                                }).response.on_disabled_hover_text("ProRes and DNxHR are visually lossless intra-frame codecs by nature, so this is inherently active.");
                             }
                             ui.end_row();
                             if old_settings != self.settings {
@@ -337,7 +339,6 @@ impl eframe::App for ThreaderApp {
                         };
                         
                         let fixed_duration = match self.settings.timing {
-                            Timing::FixedFps(fps) => Some(1.0 / (fps as f32)),
                             Timing::CustomFps => Some(1.0 / self.settings.custom_fps),
                             Timing::FixedFpsAverage => Some(1.0 / (average_fps as f32)),
                             Timing::TrueExifDynamic | Timing::TrueExifHighPrecision | Timing::TrueExifVfr => None,
@@ -384,7 +385,6 @@ impl eframe::App for ThreaderApp {
                                 use std::io::{BufRead, BufReader};
                                 
                                 let fps_str = match settings.timing {
-                                    Timing::FixedFps(fps) => fps.to_string(),
                                     Timing::CustomFps => settings.custom_fps.to_string(),
                                     Timing::FixedFpsAverage => average_fps.to_string(),
                                     Timing::TrueExifHighPrecision => "120".to_string(), // 120 FPS CFR for NLEs to digest VFR accurately
@@ -417,6 +417,10 @@ impl eframe::App for ThreaderApp {
                                     },
                                     Codec::ProRes => {
                                         ffmpeg_args.extend(["-c:v", "prores_ks", "-profile:v", "3", "-vendor", "apl0", "-pix_fmt", "yuv422p10le"]);
+                                        "mov"
+                                    },
+                                    Codec::DNxHR => {
+                                        ffmpeg_args.extend(["-c:v", "dnxhd", "-profile:v", "dnxhr_hq", "-pix_fmt", "yuv422p"]);
                                         "mov"
                                     }
                                 };
@@ -487,7 +491,7 @@ impl eframe::App for ThreaderApp {
                     if *success {
                         let ext = match self.settings.codec {
                             Codec::H264 | Codec::HEVC | Codec::AV1 => "mp4",
-                            Codec::ProRes => "mov",
+                            Codec::ProRes | Codec::DNxHR => "mov",
                         };
                         let output_file = folder.join(format!("output.{}", ext));
                         
