@@ -3534,6 +3534,7 @@ dependencies = [
  "common",
  "eframe",
  "egui",
+ "image",
  "open",
  "rfd",
  "time",

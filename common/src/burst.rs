@@ -9,7 +9,7 @@ use time::PlainDateTime;
 use time::format_description::StaticFormatDescription;
 use time::macros::format_description;
 
-#[derive(Debug, Getters)]
+#[derive(Debug, Getters, Clone)]
 pub struct BurstFile {
     #[getset(get = "pub")]
     path: PathBuf,

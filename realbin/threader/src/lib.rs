@@ -56,6 +56,7 @@ enum Codec {
     ProRes,
     DNxHR,
     AV1,
+    FcpXml,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -282,6 +283,8 @@ impl eframe::App for ThreaderApp {
                                     .on_hover_text("Visually lossless, all-intra codec. Best for importing into video editors like Premiere or Resolve.");
                                 ui.radio_value(&mut self.settings.codec, Codec::DNxHR, "DNxHR (MOV)")
                                     .on_hover_text("Avid's visually lossless, all-intra editing codec. Excellent performance on NLEs.");
+                                ui.radio_value(&mut self.settings.codec, Codec::FcpXml, "FCPXML (Timeline)")
+                                    .on_hover_text("Generates a DaVinci/Premiere timeline file");
                             });
                             ui.end_row();
 
@@ -387,10 +390,15 @@ impl eframe::App for ThreaderApp {
                             let (progress_tx, progress_rx) = std::sync::mpsc::channel();
 
                             let settings = self.settings;
+                            let burst_clone = burst.clone();
 
                             let handle = thread::spawn(move || {
                                 use std::process::Stdio;
                                 use std::io::{BufRead, BufReader};
+                                
+                                if settings.codec == Codec::FcpXml {
+                                    return generate_fcpxml(&burst_clone, settings, peak_fps, fixed_duration, &all_durations, &folder_clone, &progress_tx);
+                                }
                                 
                                 let fps_str = match settings.timing {
                                     Timing::CustomFps => settings.custom_fps.to_string(),
@@ -430,7 +438,8 @@ impl eframe::App for ThreaderApp {
                                     Codec::DNxHR => {
                                         ffmpeg_args.extend(["-c:v", "dnxhd", "-profile:v", "dnxhr_hq", "-pix_fmt", "yuv422p"]);
                                         "mov"
-                                    }
+                                    },
+                                    Codec::FcpXml => unreachable!()
                                 };
                                 
                                 let output_file = format!("output.{}", ext);
@@ -500,6 +509,7 @@ impl eframe::App for ThreaderApp {
                         let ext = match self.settings.codec {
                             Codec::H264 | Codec::HEVC | Codec::AV1 => "mp4",
                             Codec::ProRes | Codec::DNxHR => "mov",
+                            Codec::FcpXml => "xml",
                         };
                         let output_file = folder.join(format!("output.{}", ext));
                         
@@ -535,4 +545,83 @@ impl eframe::App for ThreaderApp {
             });
         });
     }
+}
+
+fn generate_fcpxml(
+    burst: &[BurstFile],
+    settings: RenderSettings,
+    peak_fps: u32,
+    fixed_duration: Option<f32>,
+    all_durations: &[f32],
+    folder: &std::path::Path,
+    progress_tx: &std::sync::mpsc::Sender<(usize, String)>
+) -> bool {
+    let mut xml = String::new();
+    xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE fcpxml>\n<fcpxml version=\"1.9\">\n<resources>\n");
+    
+    let base_fps = if settings.timing == Timing::TrueExifPeak { peak_fps } else { settings.high_precision_fps.max(24) };
+    
+    let mut width = 1920;
+    let mut height = 1080;
+    if let Some(first_frame) = burst.first() {
+        if let Ok((w, h)) = image::image_dimensions(first_frame.path()) {
+            width = w;
+            height = h;
+        }
+    }
+    
+    xml.push_str(&format!("  <format id=\"r0\" name=\"ThreaderFormat\" frameDuration=\"1/{}s\" width=\"{}\" height=\"{}\"/>\n", base_fps, width, height));
+    
+    for (i, frame) in burst.iter().enumerate() {
+        let abs_path = std::fs::canonicalize(frame.path()).unwrap_or_else(|_| frame.path().clone());
+        let path_str = abs_path.to_string_lossy().replace("\\", "/");
+        let file_url = if path_str.starts_with('/') {
+            format!("file://{}", path_str)
+        } else {
+            format!("file:///{}", path_str)
+        };
+        let name = frame.path().file_name().unwrap().to_string_lossy();
+        let name = name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;");
+        xml.push_str(&format!("  <asset id=\"r{}\" name=\"{}\" src=\"{}\" />\n", i + 1, name, file_url));
+    }
+    xml.push_str("</resources>\n<library>\n<event name=\"Burst Event\">\n<project name=\"Threader Burst\">\n<sequence format=\"r0\">\n<spine>\n");
+    
+    let mut current_offset_frames: u64 = 0;
+    
+    for i in 0..burst.len() {
+        let frame = &burst[i];
+        
+        let seconds = if let Some(fd) = fixed_duration {
+            fd
+        } else if i + 1 < burst.len() {
+            let duration = *burst[i + 1].created() - *frame.created();
+            duration.as_seconds_f32().max(0.01)
+        } else {
+            if all_durations.is_empty() { 0.033 } else { all_durations.last().copied().unwrap_or(0.033) }
+        };
+        
+        let duration_frames = (seconds * base_fps as f32).round().max(1.0) as u64;
+        
+        let name = frame.path().file_name().unwrap().to_string_lossy();
+        let name = name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;");
+        
+        xml.push_str(&format!("  <video name=\"{}\" ref=\"r{}\" offset=\"{}/{}s\" duration=\"{}/{}s\" start=\"0s\"/>\n", 
+            name,
+            i + 1,
+            current_offset_frames, base_fps,
+            duration_frames, base_fps
+        ));
+        
+        current_offset_frames += duration_frames;
+        if i % 10 == 0 {
+            let _ = progress_tx.send((i, format!("Generating FCPXML... {}/{}", i, burst.len())));
+        }
+    }
+    
+    xml.push_str("</spine>\n</sequence>\n</project>\n</event>\n</library>\n</fcpxml>");
+    
+    let output_file = folder.join("output.xml");
+    let _ = std::fs::write(&output_file, xml);
+    let _ = progress_tx.send((burst.len(), "Done".to_string()));
+    true
 }
